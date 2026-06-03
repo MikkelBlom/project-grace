@@ -77,10 +77,14 @@ def play_audio(audio) -> bool:
     global _out_stream
     try:
         import sounddevice as sd
+        # Play STEREO (duplicate mono -> 2 channels) so the device stays in A2DP
+        # stereo and is never coaxed into the mono/HFP path.
+        mono = np.ascontiguousarray(np.clip(audio, -1.0, 1.0), dtype=np.float32)
+        stereo = np.column_stack([mono, mono])
         if _out_stream is None:
-            _out_stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32')
+            _out_stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=2, dtype='float32')
             _out_stream.start()
-        _out_stream.write(np.ascontiguousarray(np.clip(audio, -1.0, 1.0), dtype=np.float32))
+        _out_stream.write(stereo)
         return True
     except Exception as e:
         print(f"[TTS] /speak playback failed: {e}", file=sys.stderr)
