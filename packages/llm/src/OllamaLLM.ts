@@ -199,6 +199,7 @@ export class OllamaLLM {
       if (!text) return; // Guard — no input to respond to
 
       try {
+        const turnStart = Date.now();
         // ── Multi-step agentic loop ──────────────────────────────────
         // Grace can chain tool calls: try → read result → adjust → retry,
         // and only answers once she has what's needed (or hits the cap).
@@ -248,6 +249,7 @@ export class OllamaLLM {
           const started = Date.now();
           const result = await runTool(call.tool, call.args);
           bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
+          console.log(`[OllamaLLM]    ↳ ${Date.now() - started}ms · ${JSON.stringify(result).slice(0, 160)}`);
 
           const resultJson = JSON.stringify(result);
           lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 700)}`;
@@ -274,6 +276,7 @@ export class OllamaLLM {
           return;
         }
 
+        console.log(`[OllamaLLM] ⏱ replied in ${Date.now() - turnStart}ms`);
         // ONE audio clip per reply (GPU synth is fast) — per-sentence clips were
         // dropping mid-reply over Bluetooth. A single clip plays through cleanly.
         bus.emit('tts:speaking', { text: finalText, sessionId });
@@ -320,7 +323,9 @@ export class OllamaLLM {
 
   // ── Autonomous background task: plan → execute → verify → report back ──
   private async runBackgroundTask(description: string): Promise<void> {
+    const t0 = Date.now();
     TaskRegistry.start(description);
+    console.log(`[Task] ▶ ${description}`);
     const announce = (text: string) => {
       const sid = `task-${Date.now()}`;
       bus.emit('llm:response', { text, sessionId: sid, model: this.model, spoken: true });
@@ -334,6 +339,7 @@ export class OllamaLLM {
       TaskRegistry.update('planning');
       const plan = await this.complete([{ role: 'user',
         content: `Make a short numbered plan (max 5 steps) to accomplish this with your tools. Plan only — no tool calls yet.\nTASK: ${description}` }], taskSys);
+      console.log(`[Task] 📋 plan:\n${plan}`);
       TaskRegistry.log('made a plan');
 
       const work: Array<{ role: string; content: string }> = [{ role: 'user',
@@ -355,7 +361,9 @@ export class OllamaLLM {
           work.push({ role: 'user', content: 'You are already working on the task. Use real tools or finish.' });
           continue;
         }
+        const tStep = Date.now();
         const res = await runTool(call.tool, call.args);
+        console.log(`[Task]    step ${step + 1}: ${call.tool}(${JSON.stringify(call.args).slice(0, 80)}) ${Date.now() - tStep}ms → ${JSON.stringify(res).slice(0, 120)}`);
         TaskRegistry.log(`${call.tool} → ${JSON.stringify(res).slice(0, 90)}`);
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content:
@@ -365,6 +373,7 @@ export class OllamaLLM {
       if (!result.trim()) {
         result = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did, in plain English. No tools, no JSON.' }], taskSys);
       }
+      console.log(`[Task] ✓ done in ${Math.round((Date.now() - t0) / 1000)}s`);
       TaskRegistry.finish(result || 'Done.');
       bus.emit('overlay:notification', { text: '✅ Task done', level: 'info', duration: 5000 });
       announce(`Okay, I'm done. ${result || ''}`.trim());

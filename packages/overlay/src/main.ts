@@ -117,8 +117,24 @@ function createWindow(): void {
 
 // ── Service bootstrap ───────────────────────────
 
+// Prepend [HH:MM:SS.mmm] to every console line so the logs show exact timing.
+function installTimestamps(): void {
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const p3 = (n: number) => String(n).padStart(3, '0');
+  const stamp = () => {
+    const d = new Date();
+    return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${p3(d.getMilliseconds())}`;
+  };
+  (['log', 'info', 'warn', 'error'] as const).forEach((m) => {
+    const orig = console[m].bind(console);
+    console[m] = (...args: unknown[]) => orig(`[${stamp()}]`, ...args);
+  });
+}
+
 async function startServices(): Promise<void> {
   const phase = LLM_PROVIDER === 'mock' ? '0' : '1';
+
+  installTimestamps();
 
   // ── Debug overlay — must be first so it captures startup logs ──
   debugWin = new DebugWindow();
