@@ -8,6 +8,9 @@ $graceRoot = $PSScriptRoot
 $env:GRACE_LLM_PROVIDER  = "ollama"
 $env:GRACE_STT_PROVIDER  = "whisper"
 $env:GRACE_TTS_PROVIDER  = "kokoro"
+# Smoother audio over Bluetooth: server synthesizes AND plays via a persistent stream
+# (no per-clip PowerShell spawn). Uncomment to try; re-comment to revert if worse:
+# $env:GRACE_TTS_PLAYBACK = "server"
 $env:GRACE_LLM_MODEL     = "gemma4:26b"
 $env:GRACE_WHISPER_MODEL = "large-v3"
 $env:GRACE_WHISPER_LANG  = "da"

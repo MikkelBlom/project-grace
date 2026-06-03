@@ -63,10 +63,32 @@ except Exception as e:
     sys.exit(1)
 
 # -- Synthesis ----------------------------------------------------------------
-def synthesize(text: str, voice: str, speed: float) -> bytes:
+def synthesize_audio(text: str, voice: str, speed: float):
     chunks = [np.asarray(a, dtype=np.float32)
               for _, _, a in pipeline(text, voice=voice, speed=speed)]
-    audio = np.concatenate(chunks) if chunks else np.zeros(1, dtype=np.float32)
+    return np.concatenate(chunks) if chunks else np.zeros(1, dtype=np.float32)
+
+
+# Persistent output stream for /speak — keeps the audio device open so playback
+# does not re-acquire (and re-glitch) the Bluetooth device on every clip.
+_out_stream = None
+
+def play_audio(audio) -> bool:
+    global _out_stream
+    try:
+        import sounddevice as sd
+        if _out_stream is None:
+            _out_stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32')
+            _out_stream.start()
+        _out_stream.write(np.ascontiguousarray(np.clip(audio, -1.0, 1.0), dtype=np.float32))
+        return True
+    except Exception as e:
+        print(f"[TTS] /speak playback failed: {e}", file=sys.stderr)
+        return False
+
+
+def synthesize(text: str, voice: str, speed: float) -> bytes:
+    audio = synthesize_audio(text, voice, speed)
     pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype('<i2')
     buf = io.BytesIO()
     with wave.open(buf, 'wb') as w:
@@ -104,7 +126,8 @@ class TTSHandler(BaseHTTPRequestHandler):
             self.send_json(404, {'error': 'Not found'})
 
     def do_POST(self):
-        if urlparse(self.path).path != '/synthesize':
+        p = urlparse(self.path).path
+        if p not in ('/synthesize', '/speak'):
             self.send_json(404, {'error': 'Not found'})
             return
         try:
@@ -119,7 +142,12 @@ class TTSHandler(BaseHTTPRequestHandler):
             # Kokoro is English-only; ignore leftover Danish/Piper voice names.
             if not voice or voice.startswith('da_'):
                 voice = args.voice
-            print(f"[TTS] ({voice}) {text[:80]}", file=sys.stderr)
+            print(f"[TTS] ({p} {voice}) {text[:80]}", file=sys.stderr)
+            if p == '/speak':
+                # Synthesize AND play on the server via a persistent stream.
+                ok = play_audio(synthesize_audio(text, voice, speed))
+                self.send_json(200 if ok else 500, {'played': ok})
+                return
             wav = synthesize(text, voice, speed)
             self.send_response(200)
             self.send_header('Content-Type', 'audio/wav')

@@ -28,6 +28,9 @@ const execAsync = promisify(exec);
 const KOKORO_URL = process.env.GRACE_KOKORO_URL   ?? 'http://localhost:8765';
 const VOICE      = process.env.GRACE_KOKORO_VOICE ?? 'af_heart';
 const SPEED      = parseFloat(process.env.GRACE_KOKORO_SPEED ?? '1.0');
+// 'server' = server synthesizes AND plays via a persistent stream (smoother over Bluetooth).
+// 'powershell' (default) = fetch WAV + play per-clip via PowerShell SoundPlayer.
+const PLAYBACK   = process.env.GRACE_TTS_PLAYBACK ?? 'powershell';
 const TEMP_DIR   = path.join(tmpdir(), 'grace-tts');
 
 // ─────────────────────────────────────────────
@@ -120,6 +123,17 @@ export class KokoroTTS {
   // ── TTS server (Piper / Kokoro) ──────────────
 
   private async speakViaServer(text: string): Promise<void> {
+    if (PLAYBACK === 'server') {
+      // Server synthesizes AND plays via a persistent stream — no per-clip spawn.
+      const r = await fetch(`${KOKORO_URL}/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: VOICE, speed: SPEED }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!r.ok) throw new Error(`TTS server /speak HTTP ${r.status}`);
+      return;
+    }
     const res = await fetch(`${KOKORO_URL}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
