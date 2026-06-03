@@ -103,3 +103,7 @@ for info (weather/web) the way any assistant does.
   for a URL, then `fetch_url` to read the actual article.
 - **Grace's own tool wishlist** (volunteered, unprompted): a **code-execution sandbox** (to test logic
   she writes — see P4/P5), **calendar** access, and **smart-home / IoT** control. Good priority signal.
+- **Parallel tool dev = merge pain** when every tool edits the same `index.ts` (5 subagents → a
+  "fix duplication" cleanup commit that ate the savings). To parallelize cleanly: refactor tools to
+  **one file per tool** (`packages/tools/src/tools/<name>.ts`, auto-imported by `index.ts`) so agents
+  add files with **zero conflicts**. Until then, batch same-file tool work sequentially. (P1 enabler.)

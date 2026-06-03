@@ -8,9 +8,11 @@ _Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 ## Working & verified ✅
 - GPU I/O loop: Whisper large-v3 (lang `auto`) → gemma4:26b (think:false) → Kokoro `af_heart`.
   Mic = Realtek (Buds4 stay A2DP stereo for output — the audio/HFP issue is solved).
-- **Tools** (`@grace/tools`): get_weather, get_location, **search_files** (fuzzy), web_search,
-  read_file, fetch_url, **write_file** + **move_file** (gated to home; relative paths resolve under
-  home — fixed a bug where files landed in the app dir), task_status, start_background_task.
+- **Tools** (`@grace/tools`, 16): get_weather, get_location, search_files (fuzzy), web_search,
+  read_file, fetch_url, write_file, move_file, delete_file, list_dir, open_path, open_browser,
+  clipboard_read/write, task_status, start_background_task. Write/delete/open are gated to the home
+  folder (+ a safe-app whitelist for open_path; executables under home are refused). The 5 system
+  tools came from parallel subagents (Antigravity), reviewed + security-hardened + merged by Claude.
 - **Multi-step tool loop** (self-correcting, stateful navigation, acts-not-narrates) and
   **autonomous background tasks** (plan→execute→verify→report). Both verified headless.
 - Personality-as-data + anti-fabrication + **capability honesty** (no claiming tools she lacks).
