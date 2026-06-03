@@ -59,10 +59,12 @@ Key pieces (don't bypass them):
 - **`runBackgroundTask(description)`** — autonomous: plan → execute (tool loop with verification,
   task-mode system prompt, no `<SKIP>`) → `TaskRegistry.finish` → announce via the bus.
 
-## Tools: `packages/tools/src/index.ts`
-- `ToolSpec { name, description, params, run(args) }`, `registerTool`, `describeTools` (injected into
-  the system prompt), `parseToolCall` (extracts the first balanced JSON object from a reply),
-  `runTool(name, args)`. **See `docs/adding-tools.md`.**
+## Tools: `packages/tools/src/`
+- `registry.ts` — `ToolSpec { name, description, params, run(args) }`, `registerTool`, `describeTools`
+  (injected into the system prompt), `parseToolCall` (extracts the first balanced JSON object from a reply),
+  `runTool(name, args)`, `fetchJson` helper, `TaskRegistry`. **See `docs/adding-tools.md`.**
+- `tools/*.ts` — one file per tool, each self-registers via `registerTool()` at import time.
+- `index.ts` — re-exports the public API from `registry.ts` and loads all tool files.
 - `TaskRegistry` — in-memory status for the running background task (`task_status` reads it).
 
 ## Persistence: `packages/core/src/memory.ts`
