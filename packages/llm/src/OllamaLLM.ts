@@ -227,9 +227,14 @@ export class OllamaLLM {
             // Refuse a "promise to act" (or an empty reply) as the final answer —
             // push her to emit the tool call instead of narrating intent.
             const narrating = /\b(let me|i'?ll|i will|let'?s|i'?m going to|lad mig|jeg vil|jeg skal)\b[\s\S]{0,40}\b(search|find|look|check|see|fetch|tjek|kig|find|søg|lede|tjekke)\b/i.test(reply);
-            if (reply.trim() && !narrating) { finalText = reply; break; }
+            // Also catch past-tense false claims: the LLM says "I've moved/updated/written"
+            // without actually calling a tool — words alone don't change files.
+            const falseClaim = /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
+            if (reply.trim() && !narrating && !falseClaim) { finalText = reply; break; }
             work.push({ role: 'user', content: narrating
               ? 'Do NOT narrate what you are about to do. Output the tool call JSON RIGHT NOW to actually do it.'
+              : falseClaim
+              ? 'You CLAIMED you already did something (moved/wrote/updated a file) but you did NOT call any tool — I see no tool JSON in your reply. Words alone do not change files. Output the tool-call JSON right now to ACTUALLY do it.'
               : 'You replied with nothing. Either output a tool call (one line of JSON), or give Mikkel a plain-English answer now.' });
             continue;
           }
@@ -353,8 +358,12 @@ export class OllamaLLM {
         const call = parseToolCall(reply);
         if (!call) {
           // Reject <SKIP>/empty as a result — keep executing.
-          if (reply.trim() && !SKIP_RE.test(reply)) { result = reply; break; }
-          work.push({ role: 'user', content: 'Do not stop or reply <SKIP>. Call the next tool, or give the final verified summary now.' });
+          // Also reject false claims of completed actions (same guard as the main loop).
+          const taskFalseClaim = /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
+          if (reply.trim() && !SKIP_RE.test(reply) && !taskFalseClaim) { result = reply; break; }
+          work.push({ role: 'user', content: taskFalseClaim
+            ? 'You CLAIMED you did something but called no tool. Output the tool-call JSON to ACTUALLY do it.'
+            : 'Do not stop or reply <SKIP>. Call the next tool, or give the final verified summary now.' });
           continue;
         }
         if (call.tool === 'start_background_task') { // already in a task — don't recurse
