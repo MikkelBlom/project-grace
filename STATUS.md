@@ -1,40 +1,32 @@
 # Grace — STATUS
 
-_Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), 64 GB RAM, Win 11 · git: main_
+_Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 
-## Goal
-Foundational structure usable for real, then build on top → eventually self-expanding.
-
-## Git
-Commits on `main`: `2a5f35e` foundation · `510d392` multi-step tools · `be0359d` status ·
-`3248c9b` stateful navigation · `4b33cc2` tools→@grace/tools. Working tree clean. No remote yet.
+> Full backlog + guides: **ROADMAP.md**, **docs/architecture.md**, **docs/adding-tools.md**,
+> **docs/working-with-other-ai.md**.
 
 ## Working & verified ✅
-- I/O loop: Whisper `large-v3` (GPU) → `gemma4:26b` (think:false) → Kokoro TTS (`af_heart`, GPU).
-  Speak Danish → reply English. Cross-session memory (JSON; node:sqlite absent in Electron).
-- **Tools now a real package**: `@grace/tools` (composite; llm builds via `tsc -b`). Built-ins:
-  get_weather, get_location, search_files (files+folders), web_search (real URLs).
-- **Multi-step agentic loop** (≤5 steps): chains tool calls, self-corrects (overførsler→Downloads),
-  nudges instead of going silent.
-- **Stateful navigation (new, verified)**: `lastToolContext` carries the previous tool result's
-  full paths into the next turn, so "go into that folder" resolves the real path instead of
-  restarting from home. Verified: Downloads → "go into hacker-demo" → navigated the nested project.
-- **Act, don't narrate (new)**: "let me find…" promises are rejected as final; loop forces the tool call.
-- `<SKIP>` tightened (greetings/questions/requests never skipped).
+- GPU I/O loop: Whisper large-v3 → gemma4:26b (think:false) → Kokoro `af_heart`. Danish in, English out.
+- **Tools** (`@grace/tools`): get_weather, get_location, search_files (files+folders, stateful
+  navigation), web_search, **read_file**, **fetch_url** (full page text), task_status, start_background_task.
+- **Multi-step tool loop**: self-corrects (overførsler→Downloads), keeps its place across turns,
+  acts instead of narrating. **Autonomous background tasks** (plan→execute→verify→report) — verified.
+- Personality-as-data, anti-fabrication, single-clip TTS, fresh-session context, memory (JSON), git.
 
-## Known issues (next)
-- **STT mangles English names** in Danish context (Claude→"plot"/"klart"). Recoverable via
-  conversation, but rough. Experiment: set `GRACE_WHISPER_LANG="auto"` in start-grace.ps1 (may
-  trade some Danish accuracy). Or add common terms to the Whisper initial_prompt.
-- **Audio cutout** — first sentence of a multi-sentence reply occasionally dropped (BT/per-clip
-  spawn). Real fix = **persistent audio player** in KokoroTTS (replaces per-clip PowerShell spawn);
-  also smooths the last latency. Top TTS task.
-- Bluetooth Buds4 mic forces HFP mono output; use `GRACE_MIC_NAME="Realtek"` for stereo.
-- Startup recall can surface junk (filter <20 chars). GPS vs IP location. Calendar (OAuth).
+## Needs YOUR live test (couldn't verify headless)
+- **Audio player (opt-in)**: set `$env:GRACE_TTS_PLAYBACK = "server"` in start-grace.ps1 (line is
+  there, commented). Server now plays via a persistent stream instead of per-clip PowerShell —
+  should stop the dropouts/"switching". Re-comment to revert if worse.
+- **Autonomous tasks live**: try "find X, dig through it and report back" → she should say she'll
+  get back to you, work in the background, then announce the result. Ask "how far are you?" mid-task.
+- **Bluetooth audio**: the "switching" is the Buds4 *mic* forcing HFP mono. For stereo, use
+  `GRACE_MIC_NAME="Realtek"` (laptop mic) so the earbuds stay A2DP for output.
 
-## Run
-`cd grace ; .\start-grace.ps1`  → try: "kig i min overførsler-mappe", then "gå ind i <folder>".
+## This session's commits
+`fetch_url` · autonomous task system · roadmap+guides · opt-in audio player.
 
-## Next session
-1. Persistent audio player (cutout + smoothness). 2. STT tuning for names. 3. More tools (GPS/calendar)
-   + multi-tool-per-turn. 4. GitHub remote + push.
+## Next (see ROADMAP.md for full detail + how-to)
+1. **Persistent audio** — confirm `GRACE_TTS_PLAYBACK=server` feels better (P0).
+2. **Tools**: list_dir, write_file (gated), clipboard, open_path, app_context, screenshot+vision;
+   **multiple tool calls per turn** (P1). Headless-testable → good to hand to Antigravity/Copilot.
+3. STT `lang="auto"` experiment (P3); better-sqlite3 (P4); scheduler → self-expansion (P2/P5).
