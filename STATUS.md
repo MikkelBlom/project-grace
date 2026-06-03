@@ -1,38 +1,42 @@
 # Grace — STATUS
 
-_Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), 64 GB RAM, Win 11_
+_Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), 64 GB RAM, Win 11 · git: main_
 
 ## Goal
 Foundational structure usable for real, then build on top → eventually self-expanding.
 
+## Version control ✅ (new)
+- `git init` done. Commits: `2a5f35e` (foundation), `510d392` (tooling upgrade).
+- `.gitignore` excludes node_modules / dist / models / data / logs / compiled output.
+- No remote yet — add a GitHub remote + `git push -u origin main` when ready.
+
 ## Working & verified ✅
-- I/O loop: mic → Whisper `large-v3` (GPU) → `gemma4:26b` (think:false, streaming) → Kokoro TTS.
-- Voice = Kokoro **female English** (`af_heart`); speak **Danish** → reply **English**.
-- Personality as data (`config/personality.json`, runtime-editable). Selective `<SKIP>`,
-  name-mishearing recovery, **anti-fabrication** (no fake data/sources/dates, no "I'll try again").
-- Tools (`packages/llm/src/tools.ts`): `get_weather`, `get_location`, `search_files`, `web_search`
-  (DDG HTML, real URLs). One tool per turn.
-- **Persistence (new, verified headless)**: `packages/core/src/memory.ts` — `node:sqlite` with JSON
-  fallback, stored in `grace/data/`. GraceCore restores last 8 turns on boot + logs every turn.
-- **Terminal logging**: Grace's replies now print as `[Grace] 💬 …` (and `🤐` on skip).
-- **Startup greeting**: main.ts speaks a greeting ~3s after boot; recalls previous session's last
-  topic via `getStartupGreeting()`. (Spoken-on-boot timing needs live confirmation.)
+- I/O loop: Whisper `large-v3` (GPU) → `gemma4:26b` (think:false) → Kokoro TTS
+  (`af_heart`, **GPU** via torch cu128). Speak Danish → reply English.
+- **Multi-step agentic tools (new, verified):** OllamaLLM runs a ReAct loop (≤5 steps) —
+  chains tool calls, reads results, **self-corrects** (e.g. "overførsler" → searches
+  "Downloads"), nudges instead of going silent on empty replies, answers only when it has
+  the info. Verified end-to-end: listed real Downloads contents.
+- **search_files (new):** matches FOLDERS + files; empty query lists top level; bare/`home`/`~`
+  roots resolve under home. (Was file-only before — couldn't find folders at all.)
+- `<SKIP>` tightened: only true backchannel ("ok"/"mmm"); greetings/questions/requests never skipped.
+- Tools: get_weather, get_location, search_files, web_search (real URLs). Personality-as-data,
+  anti-fabrication, cross-session persistence (JSON; node:sqlite absent in Electron → fallback).
 
-## Mic / audio notes
-- `GRACE_MIC_NAME` in start-grace.ps1 chooses mic. **Bluetooth caveat**: using Buds4 as MIC forces
-  HFP mono (one ear). Use `"Realtek"` to keep Buds4 stereo for output. Default currently `"Buds4"`.
-
-## Known / deferred
-- **Latency** "clunky/not smooth" — TTS pipeline (Kokoro CPU + PowerShell spawn per clip). Real fix =
-  GPU Kokoro (torch cu128) or a persistent audio player. Deferred (user: minor).
-- Electron's bundled Node may lack `node:sqlite` → auto JSON fallback (still persists).
-- search_files depth limits; GPS location (vs IP); multi-turn agency ("retry"); calendar (OAuth).
-- `git init` still pending. Tools NOT yet promoted to `packages/tools` (optional).
+## Deferred (with reasons)
+- **Promote tools → packages/tools** — needs `npm install` to link the new workspace + a
+  build-order fix (tools must `tsc` before llm; npm builds alphabetically so it'd come after).
+  Steps for next time: create packages/tools/{package.json,tsconfig.json,src/index.ts} (composite,
+  exclude electron `ui-self-test.ts`); add `@grace/tools` dep + reference in llm; change
+  OllamaLLM import to `@grace/tools`; prepend `npm run build -w packages/tools` to root build;
+  `npm install`; rebuild. Not done to avoid destabilising the working build on a low budget.
+- TTS smoothness: GPU helped; per-clip PowerShell playback spawn is the last bit (persistent player).
+- Minor: startup recall can surface junk (last session it greeted with a swear word — filter <20 chars).
+- GPS location vs IP; calendar tool (OAuth); deeper file search via Windows index.
 
 ## Run
-`cd grace ; .\start-grace.ps1`  → she should greet you on boot and remember across restarts.
+`cd grace ; .\start-grace.ps1`  (Buds4 for mic = mono output; use `GRACE_MIC_NAME="Realtek"` for stereo).
+Try: "kig i min overførsler-mappe", "find filer der hedder X", weather, web search.
 
-## Next candidates
-1. Smooth TTS latency (GPU Kokoro / persistent player).
-2. `git init` (overdue — lots uncommitted) + promote tools → `packages/tools`.
-3. Session-summary on close (better "unfinished" recall than last-user-message).
+## Next session
+1. Promote tools → packages/tools (steps above). 2. Persistent audio player. 3. More tools + GPS.
