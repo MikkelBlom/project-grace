@@ -9,7 +9,67 @@
 | 1 | `a674ffa` | Extract tool framework into registry.ts |
 | 2 | `3db5bde` | Move built-in tools to individual files |
 | 3 | `8e0880a` | Rewrite index.ts as re-export hub with explicit tool imports |
-| 4 | `b5b2f2c` | Update docs and add HANDOFF.md |
+| 4 | `c119132` | Update docs and add HANDOFF.md |
+| 5 | `fd51686` | Fix narration guard: catch past-tense false claims of tool actions |
+
+---
+
+## Bug Fix: Grace Claims Actions Without Calling Tools (commit 5)
+
+### The Problem
+
+From the live session logs, all 16 tools work correctly when called — `write_file`
+creates files, `move_file` moves them, `delete_file` deletes them. The bug was in the
+**LLM tool loop** in `packages/llm/src/OllamaLLM.ts`.
+
+The narration guard (line 229) only caught **future-tense intent**:
+```
+"let me search…", "I'll find…", "I'm going to check…"
+```
+
+The LLM was bypassing it by responding with **past-tense or present-progressive
+false claims**:
+```
+"I've moved the file back to your Desktop"
+"I've updated the file now with the header"
+"I'm writing the header to the file right now"
+"I'm fixing it right now"
+```
+
+These prose responses contained no tool-call JSON, so the system treated them as
+valid final answers. **The action was never performed — the LLM just hallucinated
+having done it.**
+
+### The Fix
+
+Added a `falseClaim` regex that catches `I've/I'm/I have` + action verbs in both
+English and Danish (moved, moving, written, writing, updated, updating, created,
+creating, fixed, fixing, etc.). When triggered in a step with no tool call, the
+model is told:
+
+> "You CLAIMED you already did something but you did NOT call any tool — words
+> alone do not change files. Output the tool-call JSON right now to ACTUALLY do it."
+
+Applied to both the main tool loop (line ~226-240) and the background task loop
+(line ~359-367).
+
+### Regex Test Results (all 13 pass)
+
+```
+✅ CAUGHT "I've moved the file back to the overførsler folder"
+✅ CAUGHT "I've updated the file now with the header"
+✅ CAUGHT "I'm fixing it right now"
+✅ CAUGHT "I'm rewriting it now"
+✅ CAUGHT "I've clearly been missing the mark. I've moved the file back"
+✅ CAUGHT "Done. I've created the new file on your Desktop"
+✅ CAUGHT "I'm writing the header to the file right now"
+✅ CAUGHT "I have saved the changes"
+✅ PASS  "Brilliant - running locally and loving it. What are you up to?"
+✅ PASS  "Here is the full list of the 16 tools available to me:"
+✅ PASS  "Thanks, Mikkel. I try my best. What's our next move?"
+✅ PASS  "Sorry, I couldn't find that file anywhere."
+✅ PASS  "The weather in Copenhagen is 15 degrees."
+```
 
 ---
 
@@ -117,6 +177,23 @@ packages/tools/src/
 (cleaned up test file)
 ```
 
+### Full file-operation integration test
+
+```
+--- write new ---
+{"path":"C:\\Users\\mikke\\Desktop\\grace_test.txt","bytes":8,"mode":"overwrite","ok":true}
+--- overwrite ---
+{"path":"C:\\Users\\mikke\\Desktop\\grace_test.txt","bytes":11,"mode":"overwrite","ok":true}
+--- read back ---
+{"path":"C:\\Users\\mikke\\Desktop\\grace_test.txt","totalLines":1,"returned":1,"text":"OVERWRITTEN"}
+--- move ---
+{"from":"C:\\Users\\mikke\\Desktop\\grace_test.txt","to":"C:\\Users\\mikke\\Desktop\\grace_test_moved.txt","ok":true}
+--- read moved ---
+{"path":"C:\\Users\\mikke\\Desktop\\grace_test_moved.txt","totalLines":1,"returned":1,"text":"OVERWRITTEN"}
+--- delete ---
+{"path":"C:\\Users\\mikke\\Desktop\\grace_test_moved.txt","ok":true}
+```
+
 ---
 
 ## Changes Beyond a Pure Move
@@ -136,8 +213,20 @@ packages/tools/src/
 - **`packages/tools/tsconfig.json`** — broadened `include` from `["src/index.ts"]` to
   `["src"]` so tsc picks up all new files.
 
+- **`packages/llm/src/OllamaLLM.ts`** — added `falseClaim` regex to narration guard
+  in both the main tool loop and background task loop (commit 5). This is a logic fix,
+  not a tool relocation.
+
 ## Uncertainty
 
-- None. Build is green, all 16 tools register, all gate checks pass, OllamaLLM.ts compiles
-  unchanged. The refactor is a pure relocation with the one minor change noted above
-  (fetchJson export).
+- The `falseClaim` regex is broad by design — it catches "I've/I'm + action verb" patterns.
+  There is a small chance of false positives if the LLM legitimately says e.g. "I've moved on
+  to the next topic" after a non-file-related query. However, this only costs one extra tool-loop
+  iteration (the model will respond with prose again and the loop proceeds), which is far better
+  than the current failure where the LLM claims it acted and the user sees nothing happen.
+
+- The guard has no way to distinguish a *legitimate* report of a completed action (after a
+  tool call succeeded in a *previous* step) from a false claim. However, after a successful
+  tool call, the model's next reply typically includes the tool result summary and naturally
+  reads as prose ("Done. The file is on your Desktop.") without matching the `I've moved`
+  pattern — so this should not cause issues in practice.
