@@ -219,6 +219,7 @@ export class OllamaLLM {
         const MAX_STEPS = 5;
         let finalText: string | null = null;
         let lastToolNote = '';
+        let toolExecutedInLastStep = false;
 
         for (let step = 0; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
@@ -226,10 +227,13 @@ export class OllamaLLM {
           if (!call) {
             // Refuse a "promise to act" (or an empty reply) as the final answer —
             // push her to emit the tool call instead of narrating intent.
-            const narrating = /\b(let me|i'?ll|i will|let'?s|i'?m going to|lad mig|jeg vil|jeg skal)\b[\s\S]{0,40}\b(search|find|look|check|see|fetch|tjek|kig|find|søg|lede|tjekke)\b/i.test(reply);
+            const narrating = /\b(let me|i'?ll|i will|let'?s|i'?m going to|lad mig|jeg vil|jeg skal)\b[\s\S]{0,40}\b(search|find|look|check|see|fetch|tjek|kig|søg|lede|tjekke|restore|perform|fix|write|delete|open|move|update|create|rename|copy|save|add|remove|format|change|modify|place|relocate|overwrite|flet|slet|opret|skriv|flyt|gem|opdater|ret|ændr|tilføj|omdøb|rediger)\b/i.test(reply);
             // Also catch past-tense false claims: the LLM says "I've moved/updated/written"
             // without actually calling a tool — words alone don't change files.
-            const falseClaim = /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
+            const falseClaim = !toolExecutedInLastStep && /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
+            
+            toolExecutedInLastStep = false;
+
             if (reply.trim() && !narrating && !falseClaim) { finalText = reply; break; }
             work.push({ role: 'user', content: narrating
               ? 'Do NOT narrate what you are about to do. Output the tool call JSON RIGHT NOW to actually do it.'
@@ -255,6 +259,8 @@ export class OllamaLLM {
           const result = await runTool(call.tool, call.args);
           bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
           console.log(`[OllamaLLM]    ↳ ${Date.now() - started}ms · ${JSON.stringify(result).slice(0, 160)}`);
+
+          toolExecutedInLastStep = true;
 
           const resultJson = JSON.stringify(result);
           lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 700)}`;
@@ -352,6 +358,7 @@ export class OllamaLLM {
 
       let result = '';
       const MAX = 14;
+      let toolExecutedInLastStep = false;
       for (let step = 0; step < MAX; step++) {
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
@@ -359,7 +366,10 @@ export class OllamaLLM {
         if (!call) {
           // Reject <SKIP>/empty as a result — keep executing.
           // Also reject false claims of completed actions (same guard as the main loop).
-          const taskFalseClaim = /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
+          const taskFalseClaim = !toolExecutedInLastStep && /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
+          
+          toolExecutedInLastStep = false;
+
           if (reply.trim() && !SKIP_RE.test(reply) && !taskFalseClaim) { result = reply; break; }
           work.push({ role: 'user', content: taskFalseClaim
             ? 'You CLAIMED you did something but called no tool. Output the tool-call JSON to ACTUALLY do it.'
@@ -374,6 +384,8 @@ export class OllamaLLM {
         const res = await runTool(call.tool, call.args);
         console.log(`[Task]    step ${step + 1}: ${call.tool}(${JSON.stringify(call.args).slice(0, 80)}) ${Date.now() - tStep}ms → ${JSON.stringify(res).slice(0, 120)}`);
         TaskRegistry.log(`${call.tool} → ${JSON.stringify(res).slice(0, 90)}`);
+        
+        toolExecutedInLastStep = true;
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content:
           `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 1800)}\n` +

@@ -20,6 +20,7 @@ import './tools/web_search.js';
 import './tools/read_file.js';
 import './tools/fetch_url.js';
 import './tools/write_file.js';
+import './tools/replace_file_content.js';
 import './tools/move_file.js';
 import './tools/delete_file.js';
 import './tools/list_dir.js';

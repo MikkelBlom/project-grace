@@ -13,7 +13,7 @@ $env:GRACE_TTS_PROVIDER  = "kokoro"
 # $env:GRACE_TTS_PLAYBACK = "server"
 $env:GRACE_LLM_MODEL     = "gemma4:26b"
 $env:GRACE_WHISPER_MODEL = "large-v3"
-$env:GRACE_WHISPER_LANG  = "auto"
+$env:GRACE_WHISPER_LANG  = "da"
 $env:GRACE_PYTHON_CMD    = "py"
 
 # --- Mikrofon-valg ---------------------------------------------------------
@@ -46,7 +46,7 @@ $kokoro = Start-Process -FilePath "py" -ArgumentList $kokoroArgs -PassThru -NoNe
 
 # Wait for Kokoro to be ready (max 10 seconds)
 $ready = $false
-for ($i = 0; $i -lt 20; $i++) {
+for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 500
     try {
         $health = Invoke-RestMethod -Uri "http://localhost:8765/health" -TimeoutSec 1
