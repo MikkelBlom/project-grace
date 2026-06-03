@@ -601,6 +601,16 @@ registerTool({
       return { error: `Refused: ${p} is outside your home folder (${home}) and not an allowed safe system application.` };
     }
 
+    // Safety: never RUN programs/scripts under home (only the whitelisted system apps above
+    // may be executables). Open documents, folders, and media — not arbitrary code.
+    if (isUnderHome && !isBareCommand) {
+      const ext = path.extname(p).toLowerCase();
+      const danger = new Set(['.exe', '.bat', '.cmd', '.com', '.ps1', '.psm1', '.msi', '.scr', '.vbs', '.vbe', '.js', '.jar', '.reg', '.lnk']);
+      if (danger.has(ext)) {
+        return { error: `Refused: ${p} looks executable (${ext}). open_path will not run programs or scripts — open documents, folders, or media instead.` };
+      }
+    }
+
     // Check file/folder existence if it's not a bare command
     if (!isBareCommand) {
       try {
