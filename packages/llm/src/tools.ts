@@ -134,24 +134,26 @@ registerTool({
   },
 });
 
-// 3) Local file search by filename under a root (default: user's home dir).
+// 3) Local file/folder search under a root (default: user's home dir).
 registerTool({
   name: 'search_files',
-  description: 'Search for local files whose name matches a query (live walk, no indexing).',
+  description: 'Search local FILES and FOLDERS whose name contains a query (live walk, no indexing). Empty query lists the top level of the root. Note: Danish folder names are usually English on disk (Downloads, Documents, Pictures, Desktop).',
   params: {
-    query: { type: 'string', description: 'text that must appear in the filename', required: true },
-    root: { type: 'string', description: "folder to search (optional, default = user's home)" },
+    query: { type: 'string', description: 'text the file/folder name should contain; empty = list the top level of root' },
+    root: { type: 'string', description: "folder to search; a bare name resolves under home (e.g. 'Downloads'). Default = home folder." },
   },
   async run(args) {
     const os = await import('os');
     const fs = await import('fs/promises');
     const path = await import('path');
     const q = String(args.query ?? '').toLowerCase();
-    if (!q) throw new Error('query is required');
-    const root = args.root ? String(args.root) : os.homedir();
-    const skip = new Set(['node_modules', '.git', 'AppData', '$Recycle.Bin', 'Windows', 'ProgramData']);
-    const hits: string[] = [];
-    const maxHits = 20, maxVisited = 8000;
+    let root = args.root ? String(args.root) : os.homedir();
+    const rl = root.toLowerCase().trim();
+    if (!args.root || rl === 'home' || rl === '~' || rl === '.' || rl === '') root = os.homedir();
+    else if (!path.isAbsolute(root)) root = path.join(os.homedir(), root);
+    const skip = new Set(['node_modules', '.git', 'AppData', '$Recycle.Bin', 'Windows', 'ProgramData', '.cache']);
+    const hits: Array<{ path: string; type: 'file' | 'folder' }> = [];
+    const maxHits = 30, maxVisited = 20000;
     let visited = 0;
     async function walk(dir: string, depth: number): Promise<void> {
       if (hits.length >= maxHits || visited > maxVisited || depth > 6) return;
@@ -161,16 +163,16 @@ registerTool({
         if (hits.length >= maxHits) return;
         visited++;
         const full = path.join(dir, e.name);
-        if (e.isDirectory()) {
-          if (skip.has(e.name) || e.name.startsWith('.')) continue;
-          await walk(full, depth + 1);
-        } else if (e.name.toLowerCase().includes(q)) {
-          hits.push(full);
-        }
+        const isDir = e.isDirectory();
+        // Empty query => list the top level (depth 0). Otherwise match files AND folders by name.
+        const match = q ? e.name.toLowerCase().includes(q) : depth === 0;
+        if (match) hits.push({ path: full, type: isDir ? 'folder' : 'file' });
+        if (isDir && !skip.has(e.name) && !e.name.startsWith('.')) await walk(full, depth + 1);
       }
     }
-    await walk(root, 0);
-    return { root, matches: hits, count: hits.length };
+    try { await walk(root, 0); }
+    catch (e) { return { root, error: String(e) }; }
+    return { root, query: args.query ?? '', count: hits.length, matches: hits };
   },
 });
 

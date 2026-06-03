@@ -196,7 +196,7 @@ export class OllamaLLM {
     bus.on('llm:thinking', async ({ sessionId, text, history }) => {
       if (!text) return; // Guard — no input to respond to
 
-      // Speak complete sentences from a buffer as they form (low-latency streaming).
+      // Speak complete sentences from the final answer (GPU TTS keeps this smooth).
       const flushSentences = (buf: string): number => {
         const re = /[^.!?…]+[.!?…]+["')\]]*(?:\s|$)/g;
         let consumed = 0;
@@ -208,69 +208,66 @@ export class OllamaLLM {
         }
         return consumed;
       };
-      // Consume a token stream, speaking each sentence as it completes. Returns full text.
-      const speakStream = async (gen: AsyncGenerator<string>): Promise<string> => {
-        let full = '', spoken = 0;
-        for await (const chunk of gen) {
-          full += chunk;
-          spoken += flushSentences(full.slice(spoken));
-        }
-        const tail = full.slice(spoken).trim();
-        if (tail) bus.emit('tts:speaking', { text: tail, sessionId });
-        return full;
-      };
 
       try {
-        // Stream the reply, speaking sentences live — UNLESS the opening char shows it's
-        // a tool call ('{'), a <SKIP> ('<'), or a code fence ('`'), which we buffer first.
-        let full = '', spoken = 0;
-        let mode: '' | 'speak' | 'hold' = '';
-        for await (const chunk of this.chatStream(text, history ?? [])) {
-          full += chunk;
-          if (mode === '') {
-            const t = full.trimStart();
-            if (t.length >= 1) mode = (t[0] === '{' || t[0] === '<' || t[0] === '`') ? 'hold' : 'speak';
+        // ── Multi-step agentic loop ──────────────────────────────────
+        // Grace can chain tool calls: try → read result → adjust → retry,
+        // and only answers once she has what's needed (or hits the cap).
+        const work: Array<{ role: string; content: string }> = [
+          ...(history ?? []).map(h => ({
+            role: h.role === 'assistant' || h.role === 'grace' ? 'assistant' : 'user',
+            content: h.content,
+          })),
+          { role: 'user', content: text },
+        ];
+        const MAX_STEPS = 5;
+        let finalText: string | null = null;
+
+        for (let step = 0; step < MAX_STEPS; step++) {
+          const reply = await this.complete(work);
+          const call = parseToolCall(reply);
+          if (!call) {
+            if (reply.trim()) { finalText = reply; break; }
+            // Empty reply — nudge once instead of going silent.
+            work.push({ role: 'user', content: 'You replied with nothing. Either call a tool (one line of JSON) to get what is needed, or give Mikkel a plain-English answer now.' });
+            continue;
           }
-          if (mode === 'speak') spoken += flushSentences(full.slice(spoken));
-        }
 
-        if (mode === 'speak') {
-          const tail = full.slice(spoken).trim();
-          if (tail) bus.emit('tts:speaking', { text: tail, sessionId });
-          bus.emit('llm:response', { text: full, sessionId, model: this.model, spoken: true });
-          return;
-        }
-
-        // 'hold' / empty — classify the buffered reply.
-        const call = parseToolCall(full);
-        if (call) {
           const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          console.log(`[OllamaLLM] 🔧 tool: ${call.tool}`, call.args);
-          bus.emit('overlay:notification', { text: `🔧 ${call.tool}`, level: 'info', duration: 2500 });
+          console.log(`[OllamaLLM] 🔧 step ${step + 1}: ${call.tool}`, call.args);
+          bus.emit('overlay:notification', { text: `🔧 ${call.tool}`, level: 'info', duration: 2000 });
           bus.emit('tool:execute', { name: call.tool, args: call.args, callId });
           const started = Date.now();
           const result = await runTool(call.tool, call.args);
           bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
-          const answer = await speakStream(this.chatStream(
-            `You called the tool "${call.tool}" and got this result (JSON): ${JSON.stringify(result)}. ` +
-            `Mikkel's original message was: "${text}". Answer him briefly and naturally in English using ONLY this result. ` +
-            `If the result has an error or is empty, say so honestly. Do NOT call another tool.`,
-            history ?? [],
-          ));
-          bus.emit('llm:response', { text: answer, sessionId, model: this.model, spoken: true });
-          return;
+
+          work.push({ role: 'assistant', content: reply });
+          work.push({ role: 'user', content:
+            `TOOL RESULT (${call.tool}): ${JSON.stringify(result)}\n` +
+            `If this is empty or an error, you MUST try again with a corrected query or a different tool (output a NEW tool JSON) — ` +
+            `do not give up after one attempt. Danish folder names are English on disk: overførsler→Downloads, ` +
+            `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. Only once you actually have the info, ` +
+            `answer Mikkel in plain English with NO JSON.` });
         }
 
-        if (SKIP_RE.test(full)) {
+        if (finalText === null || !finalText.trim()) {
+          finalText = await this.complete([...work, {
+            role: 'user',
+            content: 'Give Mikkel your best plain-English answer now based on what you found. No tools, no JSON. If you genuinely could not find it, say so briefly.',
+          }]);
+        }
+
+        // <SKIP> => stay silent.
+        if (SKIP_RE.test(finalText)) {
           bus.emit('llm:response', { text: '', sessionId, model: this.model, spoken: true });
           return;
         }
 
-        // Held on '<'/'`' but not actually a skip/tool — just speak it.
-        const consumed = flushSentences(full);
-        const tail = full.slice(consumed).trim();
+        // Speak the final answer, sentence by sentence.
+        const consumed = flushSentences(finalText);
+        const tail = finalText.slice(consumed).trim();
         if (tail) bus.emit('tts:speaking', { text: tail, sessionId });
-        bus.emit('llm:response', { text: full, sessionId, model: this.model, spoken: true });
+        bus.emit('llm:response', { text: finalText, sessionId, model: this.model, spoken: true });
       } catch (err) {
         console.error('[OllamaLLM] Chat error:', err);
         bus.emit('system:error', {
@@ -278,7 +275,6 @@ export class OllamaLLM {
           error: String(err),
           recoverable: true,
         });
-        // Graceful fallback (spoken via GraceCore since nothing was streamed).
         bus.emit('llm:response', {
           text: `Sorry — I couldn't reach Ollama at ${OLLAMA_URL}. Make sure it's running and ${this.model} is pulled.`,
           sessionId,
@@ -287,6 +283,29 @@ export class OllamaLLM {
         });
       }
     });
+  }
+
+  // ── Multi-step completion (non-streaming, system prompt + think:false) ──
+  private async complete(messages: Array<{ role: string; content: string }>): Promise<string> {
+    const norm = messages.map(m => ({
+      role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
+      content: m.content,
+    }));
+    const res = await fetch(`${this.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...norm],
+        stream: false,
+        think: false,
+        options: { temperature: 0.5, top_p: 0.9, num_ctx: 32768, num_predict: 1024 },
+      }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json() as { message?: { content?: string } };
+    return data.message?.content?.trim() ?? '';
   }
 
   // ── Core chat method ─────────────────────────
