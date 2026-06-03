@@ -71,9 +71,15 @@ for info (weather/web) the way any assistant does.
 ### P6 — Remote access
 - WhatsApp (Meta Cloud API — heavier) or Telegram (trivial Bot API) bridge to talk to Grace remotely.
 
-### P7 — Overlay/UX polish
+### P7 — Overlay / debug view
+- The Electron debug overlay (`DebugWindow`, IPC `graceDebug` + `debug:event`) is the dev
+  "magnifying glass". Make it MORE INFORMATIVE but keep it lightweight (Mikkel uses the console
+  more): a status ticker + a simplified live log stream + current `task_status`. A standalone
+  window later is fine — but do NOT build a heavy enterprise dashboard (decided with Mikkel).
 - Show `task_status` progress in the overlay; "speaking" state on first audio; focus boxes;
   multi-monitor follow; vignette states (already scaffolded in `packages/overlay`).
+- **Autonomous task results:** speak a SHORT summary and write the full detail to a file / the
+  overlay, instead of a multi-minute spoken monologue.
 
 ---
 

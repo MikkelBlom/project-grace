@@ -2,31 +2,28 @@
 
 _Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 
-> Full backlog + guides: **ROADMAP.md**, **docs/architecture.md**, **docs/adding-tools.md**,
+> Backlog + guides: **ROADMAP.md**, **docs/architecture.md**, **docs/adding-tools.md**,
 > **docs/working-with-other-ai.md**.
 
 ## Working & verified ✅
-- GPU I/O loop: Whisper large-v3 → gemma4:26b (think:false) → Kokoro `af_heart`. Danish in, English out.
-- **Tools** (`@grace/tools`): get_weather, get_location, search_files (files+folders, stateful
-  navigation), web_search, **read_file**, **fetch_url** (full page text), task_status, start_background_task.
-- **Multi-step tool loop**: self-corrects (overførsler→Downloads), keeps its place across turns,
-  acts instead of narrating. **Autonomous background tasks** (plan→execute→verify→report) — verified.
-- Personality-as-data, anti-fabrication, single-clip TTS, fresh-session context, memory (JSON), git.
+- GPU I/O loop: Whisper large-v3 (lang `auto`) → gemma4:26b (think:false) → Kokoro `af_heart`.
+  Mic = Realtek (Buds4 stay A2DP stereo for output — the audio/HFP issue is solved).
+- **Tools** (`@grace/tools`): get_weather, get_location, search_files, web_search, read_file,
+  fetch_url (full pages), **write_file** (gated to home), task_status, start_background_task.
+- **Multi-step tool loop** (self-correcting, stateful navigation, acts-not-narrates) and
+  **autonomous background tasks** (plan→execute→verify→report). Both verified headless.
+- Personality-as-data + anti-fabrication + **capability honesty** (no claiming tools she lacks).
+- **Logging:** every console line is timestamped `[HH:MM:SS.mmm]`; the tool loop logs each tool
+  result + duration + total reply time; autonomous tasks log the plan + every step + total time.
+- Single-clip TTS; **playWav timeout 60s→600s** (long replies were SIGTERM-killed at 60s).
+- Cross-session memory (JSON; node:sqlite absent in Electron), git history (12+ commits).
 
-## Needs YOUR live test (couldn't verify headless)
-- **Audio player (opt-in)**: set `$env:GRACE_TTS_PLAYBACK = "server"` in start-grace.ps1 (line is
-  there, commented). Server now plays via a persistent stream instead of per-clip PowerShell —
-  should stop the dropouts/"switching". Re-comment to revert if worse.
-- **Autonomous tasks live**: try "find X, dig through it and report back" → she should say she'll
-  get back to you, work in the background, then announce the result. Ask "how far are you?" mid-task.
-- **Bluetooth audio**: the "switching" is the Buds4 *mic* forcing HFP mono. For stereo, use
-  `GRACE_MIC_NAME="Realtek"` (laptop mic) so the earbuds stay A2DP for output.
+## Optional / opt-in
+- `GRACE_TTS_PLAYBACK="server"` — persistent stereo audio player (smoother over BT); off by default.
 
-## This session's commits
-`fetch_url` · autonomous task system · roadmap+guides · opt-in audio player.
-
-## Next (see ROADMAP.md for full detail + how-to)
-1. **Persistent audio** — confirm `GRACE_TTS_PLAYBACK=server` feels better (P0).
-2. **Tools**: list_dir, write_file (gated), clipboard, open_path, app_context, screenshot+vision;
-   **multiple tool calls per turn** (P1). Headless-testable → good to hand to Antigravity/Copilot.
-3. STT `lang="auto"` experiment (P3); better-sqlite3 (P4); scheduler → self-expansion (P2/P5).
+## Next (see ROADMAP.md)
+1. **Tools** (great for parallel work via other AIs): list_dir, clipboard, open_path, app_context,
+   take_screenshot + describe_screen (LLaVA); **multiple tool calls per turn** (P1).
+2. Autonomous task results = short spoken summary + full detail to a file (P7).
+3. better-sqlite3 (P4); scheduler → self-expansion (P2/P5); STT vocabulary biasing (P3).
+4. GitHub remote + push (off-machine backup).
