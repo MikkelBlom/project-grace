@@ -184,7 +184,7 @@ $synth.Speak('${safeText}')`;
     const winPath = wavPath.replace(/\//g, '\\');
     const script  = `(New-Object Media.SoundPlayer '${winPath.replace(/'/g, "''")}').PlaySync()`;
     const encoded = Buffer.from(script, 'utf16le').toString('base64');
-    await execAsync(`powershell -NoProfile -EncodedCommand ${encoded}`, { timeout: 60_000 });
+    await execAsync(`powershell -NoProfile -EncodedCommand ${encoded}`, { timeout: 600_000 });
   }
 
   isOnline(): boolean { return this.isAvailable; }

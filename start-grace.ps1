@@ -13,7 +13,7 @@ $env:GRACE_TTS_PROVIDER  = "kokoro"
 # $env:GRACE_TTS_PLAYBACK = "server"
 $env:GRACE_LLM_MODEL     = "gemma4:26b"
 $env:GRACE_WHISPER_MODEL = "large-v3"
-$env:GRACE_WHISPER_LANG  = "da"
+$env:GRACE_WHISPER_LANG  = "auto"
 $env:GRACE_PYTHON_CMD    = "py"
 
 # --- Mikrofon-valg ---------------------------------------------------------
@@ -24,7 +24,7 @@ $env:GRACE_PYTHON_CMD    = "py"
 #   "Realtek" = laptop-mik -> Buds4 forbliver STEREO til output  (anbefalet hvis mono generer)
 #   "Buds4"   = bedste mik-praecision, MEN mono-output i begge oerer (BT-begraensning)
 #   "VF0700"  = webcam-mik (daarligst)
-$env:GRACE_MIC_NAME      = "Buds4"
+$env:GRACE_MIC_NAME      = "Realtek"
 
 Write-Host ""
 Write-Host "[Grace] Starting up..." -ForegroundColor Cyan
