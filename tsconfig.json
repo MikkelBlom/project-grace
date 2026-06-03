@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./shared"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/llm"
+    },
+    {
+      "path": "./packages/stt"
+    },
+    {
+      "path": "./packages/tts"
+    },
+    {
+      "path": "./packages/overlay"
+    }
+  ]
+}

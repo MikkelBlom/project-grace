@@ -1,0 +1,26 @@
+{
+  "name": "@grace/overlay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "dev": "chcp 65001 >nul 2>&1 & tsc -b && electron dist/main.js",
+    "build": "tsc -b",
+    "typecheck": "tsc -b --dry",
+    "clean": "tsc -b --clean",
+    "start": "electron dist/main.js"
+  },
+  "dependencies": {
+    "@grace/core": "*",
+    "@grace/shared": "*",
+    "@grace/stt": "*",
+    "@grace/llm": "*",
+    "@grace/tts": "*",
+    "electron": "^30.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "*"
+  }
+}

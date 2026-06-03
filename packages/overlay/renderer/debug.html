@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<title>Grace Debug</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:     #0d1117;
+    --bg2:    #161b22;
+    --bg3:    #21262d;
+    --border: #30363d;
+
+    /* Text */
+    --tx1: #e6edf3;   /* bright */
+    --tx2: #b0bec5;   /* normal */
+    --tx3: #6e7681;   /* dim */
+
+    /* Source colors */
+    --c-stt:   #58a6ff;   /* WhisperSTT */
+    --c-py:    #4a5568;   /* Python sub-process */
+    --c-core:  #3fb950;   /* GraceCore */
+    --c-llm:   #d29922;   /* OllamaLLM */
+    --c-tts:   #bc8cff;   /* KokoroTTS */
+    --c-grace: #79c0ff;   /* Grace main */
+    --c-vad:   #ffa657;   /* VAD events */
+    --c-pwr:   #f0883e;   /* PowerManager */
+    --c-ctx:   #4a5568;   /* ContextDetector */
+    --c-mic:   #56d364;   /* User transcript */
+    --c-err:   #f85149;   /* Errors */
+    --c-warn:  #e3b341;   /* Warnings */
+    --c-bus:   #79c0ff;   /* Bus events */
+
+    --font: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--tx1);
+    font-family: var(--font);
+    font-size: 12px;
+    line-height: 1.5;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── Titlebar ───────────────────────────────────── */
+  .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px 6px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+  }
+  .title-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--c-core);
+    box-shadow: 0 0 6px var(--c-core);
+    transition: background .25s, box-shadow .25s;
+    flex-shrink: 0;
+  }
+  .title-dot.thinking { background: var(--c-llm);  box-shadow: 0 0 6px var(--c-llm);  }
+  .title-dot.speaking { background: var(--c-stt);  box-shadow: 0 0 6px var(--c-stt);  }
+  .title-dot.voice    { background: var(--c-vad);  box-shadow: 0 0 6px var(--c-vad);  }
+  .title-dot.paused   { background: var(--tx3);    box-shadow: none; }
+  .title-dot.error    { background: var(--c-err);  box-shadow: 0 0 6px var(--c-err);  }
+
+  .title-text {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--tx3);
+    flex: 1;
+  }
+  .title-shortcut {
+    font-size: 9px;
+    color: var(--tx3);
+    letter-spacing: 0.3px;
+    -webkit-app-region: no-drag;
+  }
+  .btn-close {
+    background: none; border: none;
+    color: var(--tx3); cursor: pointer;
+    font: 13px var(--font);
+    padding: 1px 6px; border-radius: 3px;
+    -webkit-app-region: no-drag;
+    transition: color .1s, background .1s;
+  }
+  .btn-close:hover { color: var(--c-err); background: #f8514916; }
+
+  /* ── State row ──────────────────────────────────── */
+  .state-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 10px 2px 7px;
+    border-radius: 100px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+    border: 1px solid var(--border);
+    background: var(--bg3); color: var(--tx3);
+    transition: all .2s;
+    white-space: nowrap;
+  }
+  .badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .badge.listening   { color: var(--c-core); border-color: #3fb95044; background: #3fb95010; }
+  .badge.voice       { color: var(--c-vad);  border-color: #ffa65744; background: #ffa65710; animation: pulse .8s infinite; }
+  .badge.thinking    { color: var(--c-llm);  border-color: #d2992244; background: #d2992210; animation: blink 1.1s infinite; }
+  .badge.speaking    { color: var(--c-stt);  border-color: #58a6ff44; background: #58a6ff10; }
+  .badge.paused      { color: var(--tx3);    border-color: var(--border); }
+  .badge.field-notes { color: #bc8cff;       border-color: #bc8cff44; background: #bc8cff10; }
+
+  @keyframes pulse { 0%,100%{opacity:1}  50%{opacity:.5} }
+  @keyframes blink { 0%,100%{opacity:1}  55%{opacity:.55} }
+
+  .vad-wrap {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; color: var(--tx3);
+  }
+  .vad-track {
+    width: 52px; height: 4px;
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 2px; overflow: hidden;
+  }
+  .vad-fill {
+    height: 100%; border-radius: 2px;
+    background: var(--tx3); width: 0%;
+    transition: width .06s, background .12s;
+  }
+  .vad-fill.active { background: var(--c-vad); width: 100%; }
+
+  /* ── Info strip (last heard / last response) ────── */
+  .info-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+  }
+  .info-cell {
+    padding: 5px 10px;
+    border-right: 1px solid var(--border);
+    min-width: 0;
+  }
+  .info-cell:last-child { border-right: none; }
+  .info-key {
+    font-size: 9px; font-weight: 700;
+    letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--tx3); margin-bottom: 3px;
+  }
+  .info-val {
+    font-size: 11px; color: var(--tx2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .info-val.bright { color: var(--tx1); }
+  .conf { color: var(--tx3); margin-left: 4px; }
+
+  /* ── Filter bar ─────────────────────────────────── */
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+    overflow-x: auto;
+  }
+  .filter-bar::-webkit-scrollbar { display: none; }
+  .filter-label { font-size: 9px; color: var(--tx3); letter-spacing: 1px; text-transform: uppercase; flex-shrink: 0; margin-right: 2px; }
+  .ftag {
+    font-size: 10px; padding: 1px 7px; border-radius: 100px;
+    border: 1px solid var(--border); background: var(--bg3); color: var(--tx3);
+    cursor: pointer; flex-shrink: 0; transition: all .12s; user-select: none;
+  }
+  .ftag.on  { color: var(--tx1); border-color: #58a6ff55; background: #58a6ff14; }
+  .ftag:hover { color: var(--tx2); }
+  .spacer { flex: 1; }
+  .btn-clear {
+    background: none; border: none; color: var(--tx3);
+    font: 10px var(--font); cursor: pointer; padding: 2px 6px;
+    border-radius: 3px; flex-shrink: 0;
+    transition: color .1s, background .1s;
+  }
+  .btn-clear:hover { color: var(--tx2); background: var(--bg3); }
+
+  /* ── Log ────────────────────────────────────────── */
+  .log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+    -webkit-app-region: no-drag;
+  }
+  .log-row {
+    display: grid;
+    grid-template-columns: 50px 58px 1fr;
+    gap: 0 4px;
+    padding: 1px 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    align-items: baseline;
+    border-bottom: 1px solid transparent;
+    transition: background .08s;
+  }
+  .log-row:hover { background: #ffffff05; }
+  .log-row.err  { background: #f8514908; }
+
+  .log-time  { color: var(--tx3); font-size: 10px; }
+  .log-src   { font-size: 10px; font-weight: 700; letter-spacing: 0.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-msg   { color: var(--tx2); word-break: break-word; min-width: 0; }
+  .log-msg.bright { color: var(--tx1); }
+
+  /* ── Scrollbar ──────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+</style>
+</head>
+<body>
+
+<!-- Titlebar -->
+<div class="titlebar">
+  <div class="title-dot" id="titleDot"></div>
+  <span class="title-text">Grace&nbsp;Debug</span>
+  <span class="title-shortcut">Ctrl+Shift+L</span>
+  <button class="btn-close" id="btnClose">&#x2715;</button>
+</div>
+
+<!-- State + VAD -->
+<div class="state-row">
+  <div class="badge listening" id="badge">
+    <div class="badge-dot"></div>
+    <span id="stateLabel">LYTTER</span>
+  </div>
+  <div class="vad-wrap">
+    MIC <div class="vad-track"><div class="vad-fill" id="vadFill"></div></div>
+  </div>
+</div>
+
+<!-- Last heard / last response -->
+<div class="info-strip">
+  <div class="info-cell">
+    <div class="info-key">H&#xf8;rte</div>
+    <div class="info-val bright" id="infoHeard">&#8212;</div>
+  </div>
+  <div class="info-cell">
+    <div class="info-key">Svar</div>
+    <div class="info-val" id="infoResp">&#8212;</div>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="filter-bar">
+  <span class="filter-label">Vis</span>
+  <span class="ftag on" data-src="STT">STT</span>
+  <span class="ftag on" data-src="PY">PY</span>
+  <span class="ftag on" data-src="CORE">CORE</span>
+  <span class="ftag on" data-src="LLM">LLM</span>
+  <span class="ftag on" data-src="TTS">TTS</span>
+  <span class="ftag on" data-src="GRACE">GRACE</span>
+  <span class="ftag on" data-src="VAD">VAD</span>
+  <span class="ftag on" data-src="BUS">BUS</span>
+  <span class="ftag on" data-src="ERR">ERR</span>
+  <span class="ftag on" data-src="?">MISC</span>
+  <span class="spacer"></span>
+  <button class="btn-clear" id="btnClear">ryd</button>
+</div>
+
+<!-- Log -->
+<div class="log" id="log"></div>
+
+<script>
+'use strict';
+
+/* ── Config ──────────────────────────────────────── */
+const MAX_ENTRIES = 200;
+
+/* ── State ──────────────────────────────────────── */
+let entries    = [];
+let curState   = 'listening';
+let filters    = new Set(['STT','PY','CORE','LLM','TTS','GRACE','VAD','BUS','ERR','?']);
+
+/* ── DOM refs ───────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const titleDot  = $('titleDot');
+const badge     = $('badge');
+const stateLabel= $('stateLabel');
+const vadFill   = $('vadFill');
+const infoHeard = $('infoHeard');
+const infoResp  = $('infoResp');
+const logEl     = $('log');
+
+/* ── Buttons ────────────────────────────────────── */
+$('btnClose').addEventListener('click', () => window.graceDebug?.close());
+$('btnClear').addEventListener('click', () => { entries = []; renderLog(); });
+
+document.querySelectorAll('.ftag').forEach(el => {
+  el.addEventListener('click', () => {
+    const src = el.dataset.src;
+    if (filters.has(src)) { filters.delete(src); el.classList.remove('on'); }
+    else                  { filters.add(src);    el.classList.add('on');    }
+    renderLog();
+  });
+});
+
+/* ── Source → metadata ──────────────────────────── */
+const SOURCES = [
+  { re: /^\[WhisperSTT:py\]/,    src: 'PY',    cls: 'c-py',    color: 'var(--c-py)'    },
+  { re: /^\[WhisperSTT\]/,       src: 'STT',   cls: 'c-stt',   color: 'var(--c-stt)'   },
+  { re: /^\[Core\]/,             src: 'CORE',  cls: 'c-core',  color: 'var(--c-core)'  },
+  { re: /^\[OllamaLLM\]/,        src: 'LLM',   cls: 'c-llm',   color: 'var(--c-llm)'   },
+  { re: /^\[KokoroTTS\]/,        src: 'TTS',   cls: 'c-tts',   color: 'var(--c-tts)'   },
+  { re: /^\[Grace\]/,            src: 'GRACE', cls: 'c-grace', color: 'var(--c-grace)' },
+  { re: /^\[VAD\]/,              src: 'VAD',   cls: 'c-vad',   color: 'var(--c-vad)'   },
+  { re: /^\[PowerManager\]/,     src: 'PWR',   cls: 'c-pwr',   color: 'var(--c-pwr)'   },
+  { re: /^\[ContextDetector\]/,  src: 'CTX',   cls: 'c-ctx',   color: 'var(--c-py)'    },
+  { re: /^👤/,         src: 'MIC',   cls: 'c-mic',   color: 'var(--c-mic)'   },  // 👤
+  { re: /^\[Vignette\]/,         src: 'UI',    cls: 'c-ctx',   color: 'var(--c-py)'    },
+];
+
+function classifyLog(msg, level) {
+  if (level === 'error') return { src: 'ERR', color: 'var(--c-err)',  bright: true  };
+  if (level === 'warn')  return { src: 'ERR', color: 'var(--c-warn)', bright: false };
+  for (const s of SOURCES) {
+    if (s.re.test(msg)) return { src: s.src, color: s.color, bright: false };
+  }
+  return { src: '?', color: 'var(--tx3)', bright: false };
+}
+
+function classifyBus(type) {
+  const map = {
+    state: { src: 'BUS', color: 'var(--c-bus)'  },
+    vad:   { src: 'VAD', color: 'var(--c-vad)'  },
+    heard: { src: 'BUS', color: 'var(--c-mic)'  },
+    response: { src: 'BUS', color: 'var(--c-llm)' },
+    mode:  { src: 'BUS', color: 'var(--c-pwr)'  },
+    power: { src: 'BUS', color: 'var(--c-pwr)'  },
+    error: { src: 'ERR', color: 'var(--c-err)'  },
+  };
+  return map[type] || { src: 'BUS', color: 'var(--c-bus)' };
+}
+
+/* ── State management ───────────────────────────── */
+const STATE_MAP = {
+  listening:    { label: 'LYTTER',  cls: 'listening',   dot: '' },
+  voice:        { label: 'STEMME',  cls: 'voice',       dot: 'voice' },
+  thinking:     { label: 'TAENKER',cls: 'thinking',    dot: 'thinking' },
+  speaking:     { label: 'TALER',   cls: 'speaking',    dot: 'speaking' },
+  paused:       { label: 'PAUSE',   cls: 'paused',      dot: 'paused' },
+  'field-notes':{ label: 'NOTER',   cls: 'field-notes', dot: '' },
+  error:        { label: 'FEJL',    cls: 'paused',      dot: 'error' },
+};
+
+function setState(s) {
+  curState = s;
+  const info = STATE_MAP[s] || STATE_MAP.listening;
+  badge.className = 'badge ' + info.cls;
+  stateLabel.textContent = info.label;
+  titleDot.className = 'title-dot ' + info.dot;
+}
+
+/* ── Log helpers ────────────────────────────────── */
+function ts() {
+  return new Date().toLocaleTimeString('da-DK', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function addEntry(src, color, msg, bright, isErr) {
+  entries.unshift({ t: ts(), src, color, msg: String(msg), bright, isErr: !!isErr });
+  if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;
+  renderLog();
+}
+
+// Map filter tag → src values it covers
+const FILTER_MAP = {
+  STT:   ['STT'],
+  PY:    ['PY','CTX','UI'],
+  CORE:  ['CORE'],
+  LLM:   ['LLM'],
+  TTS:   ['TTS'],
+  GRACE: ['GRACE','MIC','PWR'],
+  VAD:   ['VAD'],
+  BUS:   ['BUS'],
+  ERR:   ['ERR'],
+  '?':   ['?'],
+};
+
+function srcVisible(src) {
+  for (const [tag, srcs] of Object.entries(FILTER_MAP)) {
+    if (srcs.includes(src) && filters.has(tag)) return true;
+  }
+  return false;
+}
+
+function renderLog() {
+  const visible = entries.filter(e => srcVisible(e.src));
+  logEl.innerHTML = visible.map(e =>
+    `<div class="log-row${e.isErr ? ' err' : ''}">` +
+      `<span class="log-time">${e.t}</span>` +
+      `<span class="log-src" style="color:${e.color}">${esc(e.src)}</span>` +
+      `<span class="log-msg${e.bright ? ' bright' : ''}">${esc(e.msg)}</span>` +
+    `</div>`
+  ).join('');
+}
+
+/* ── Event handler ──────────────────────────────── */
+function handleEvent(ev) {
+  switch (ev.type) {
+
+    /* ── Console output from all packages ── */
+    case 'log': {
+      const { src, color, bright } = classifyLog(ev.msg, ev.level);
+      // Strip the source prefix from the message for cleaner display
+      let msg = String(ev.msg);
+      for (const s of SOURCES) {
+        if (s.re.test(msg)) { msg = msg.replace(s.re, '').trim(); break; }
+      }
+      addEntry(src, color, msg, bright, ev.level === 'error');
+      break;
+    }
+
+    /* ── Structured bus events ── */
+    case 'state': {
+      setState(ev.state);
+      const { src, color } = classifyBus('state');
+      const label = STATE_MAP[ev.state]?.label ?? ev.state;
+      addEntry(src, color,
+        ev.preview ? `${ev.state}: "${ev.preview}"` : ev.state,
+        false);
+      break;
+    }
+
+    case 'vad': {
+      if (ev.hasVoice) {
+        if (curState === 'listening') setState('voice');
+        vadFill.classList.add('active');
+        addEntry('VAD', 'var(--c-vad)', 'stemme detekteret', false);
+      } else {
+        if (curState === 'voice') setState('listening');
+        vadFill.classList.remove('active');
+        addEntry('VAD', 'var(--c-vad)', 'stille', false);
+      }
+      break;
+    }
+
+    case 'heard': {
+      setState('thinking');
+      const conf = ev.confidence != null
+        ? ' [' + Math.round(Number(ev.confidence) * 100) + '%]' : '';
+      const txt = `"${ev.text}"${conf}`;
+      infoHeard.textContent = txt;
+      addEntry('BUS', 'var(--c-mic)', txt, true);
+      break;
+    }
+
+    case 'response': {
+      setState('speaking');
+      const preview = String(ev.text ?? '');
+      const short = preview.length > 80 ? preview.slice(0,77)+'...' : preview;
+      infoResp.textContent = short;
+      addEntry('BUS', 'var(--c-llm)', preview, false);
+      break;
+    }
+
+    case 'mode': {
+      const { src, color } = classifyBus('mode');
+      addEntry(src, color,
+        'mode: ' + ev.mode + (ev.reason ? ' (' + ev.reason + ')' : ''),
+        false);
+      break;
+    }
+
+    case 'power': {
+      const state = String(ev.state ?? '');
+      const { src, color } = classifyBus('power');
+      if (state === 'field-notes') setState('field-notes');
+      else if (state === 'paused' || state === 'sleeping') setState('paused');
+      else if (state === 'active' && curState !== 'listening') setState('listening');
+      addEntry(src, color,
+        'power: ' + state + (ev.reason ? ' (' + ev.reason + ')' : ''),
+        false);
+      break;
+    }
+
+    case 'error': {
+      setState('error');
+      const msg = '[' + ev.source + '] ' + ev.error +
+                  (ev.recoverable ? ' (gendannelig)' : '');
+      addEntry('ERR', 'var(--c-err)', msg, true, true);
+      break;
+    }
+  }
+}
+
+/* ── Wire IPC ───────────────────────────────────── */
+if (window.graceDebug) {
+  window.graceDebug.onEvent(handleEvent);
+} else {
+  addEntry('ERR', 'var(--c-err)', 'graceDebug IPC ikke tilgaengelig', true, true);
+}
+
+addEntry('GRACE', 'var(--c-grace)', 'debug overlay klar  (Ctrl+Shift+L for at skjule)', false);
+setState('listening');
+</script>
+</body>
+</html>

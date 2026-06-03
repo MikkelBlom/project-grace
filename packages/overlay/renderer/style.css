@@ -1,0 +1,285 @@
+/* ─── Reset & Body ─────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: transparent;
+  overflow: hidden;
+  width: 400px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+/* ─── HUD container ────────────────────────── */
+#hud {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  padding: 10px 10px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  width: 400px;
+}
+
+/* ─── Pill ─────────────────────────────────── */
+#pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: rgba(12, 12, 18, 0.88);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 100px;
+  padding: 7px 16px 7px 12px;
+  cursor: default;
+  transition: border-color 0.35s ease, box-shadow 0.35s ease;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 0 0 rgba(99,85,212,0);
+}
+
+#pill-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#pill-icon {
+  font-size: 15px;
+  color: #6355d4;
+  transition: color 0.3s, transform 0.3s;
+  line-height: 1;
+}
+
+#pill-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.82);
+  letter-spacing: 0.2px;
+}
+
+#pill-status {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 0.2px;
+}
+
+/* ─── Pulse ring ───────────────────────────── */
+#pulse-ring {
+  position: absolute;
+  inset: -5px;
+  border-radius: 100px;
+  border: 1.5px solid rgba(99, 85, 212, 0.5);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ─── States ───────────────────────────────── */
+
+/* IDLE */
+.state-idle #pill-status { content: ''; }
+
+/* LISTENING — subtle purple pulse */
+.state-listening { border-color: rgba(99, 85, 212, 0.35) !important; }
+.state-listening #pulse-ring { animation: ring-pulse 1.8s ease-in-out infinite; }
+.state-listening #pill-icon { color: #7c6af7; animation: icon-breathe 1.8s ease-in-out infinite; }
+.state-listening #pill-status::after { content: 'Lytter'; }
+
+/* THINKING — amber spin */
+.state-thinking { border-color: rgba(245, 158, 11, 0.35) !important; }
+.state-thinking #pill-icon { color: #f59e0b; animation: icon-spin 1.2s linear infinite; }
+.state-thinking #pill-status::after { content: 'Tænker'; }
+
+/* SPEAKING — green glow */
+.state-speaking { border-color: rgba(26, 158, 108, 0.4) !important;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 18px rgba(26, 158, 108, 0.18) !important; }
+.state-speaking #pill-icon { color: #1a9e6c; animation: icon-speak 0.45s ease-in-out infinite alternate; }
+.state-speaking #pill-status::after { content: 'Taler'; }
+
+/* DISCREET — red indicator */
+.state-discreet { border-color: rgba(220, 38, 38, 0.45) !important;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 14px rgba(220,38,38,0.12) !important; }
+.state-discreet #pill-icon { color: #dc2626; }
+.state-discreet #pill-label::after { content: ' 🔒'; font-size: 11px; }
+.state-discreet #pill-status::after { content: 'Diskret'; color: rgba(220,38,38,0.7); }
+
+/* BRAINSTORM */
+.state-brainstorm { border-color: rgba(139, 92, 246, 0.5) !important; }
+.state-brainstorm #pill-icon { color: #8b5cf6; animation: icon-breathe 2.5s ease-in-out infinite; }
+.state-brainstorm #pill-status::after { content: 'Brainstorm'; }
+
+/* ─── Bubbles ──────────────────────────────── */
+#bubbles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.bubble {
+  border-radius: 14px;
+  padding: 9px 13px;
+  font-size: 13px;
+  line-height: 1.55;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  max-width: 370px;
+  word-wrap: break-word;
+  animation: bubble-in 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.bubble.hidden { display: none; }
+
+
+.bubble.grace {
+  background: rgba(18, 14, 42, 0.93);
+  border: 1px solid rgba(99, 85, 212, 0.4);
+  color: rgba(255, 255, 255, 0.96);
+  border-radius: 14px 14px 14px 3px;
+  align-self: flex-end;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.bubble.user {
+  background: rgba(20, 20, 32, 0.93);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.72);
+  font-size: 12px;
+  border-radius: 14px 14px 3px 14px;
+  align-self: flex-end;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── Thinking dots ────────────────────────── */
+#dots {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 1px 0;
+}
+
+#dots.hidden { display: none; }
+
+#dots span {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: rgba(99, 85, 212, 0.65);
+  animation: dot-bounce 1.1s ease-in-out infinite;
+}
+#dots span:nth-child(2) { animation-delay: 0.18s; }
+#dots span:nth-child(3) { animation-delay: 0.36s; }
+
+/* ─── Notification ─────────────────────────── */
+#notification {
+  background: rgba(12, 12, 18, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 7px 13px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.8);
+  max-width: 370px;
+  animation: bubble-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+#notification.hidden { display: none; }
+#notification.warning { border-color: rgba(245,158,11,0.35); color: #fcd34d; }
+#notification.error   { border-color: rgba(220,38,38,0.4);  color: #fca5a5; }
+
+/* ─── Animations ───────────────────────────── */
+@keyframes ring-pulse {
+  0%, 100% { opacity: 0; transform: scale(1); }
+  50%       { opacity: 0.55; transform: scale(1.07); }
+}
+
+@keyframes icon-breathe {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+@keyframes icon-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes icon-speak {
+  from { transform: scale(1); }
+  to   { transform: scale(1.18); }
+}
+
+@keyframes dot-bounce {
+  0%, 100% { transform: translateY(0);   opacity: 0.4; }
+  50%       { transform: translateY(-5px); opacity: 1; }
+}
+
+@keyframes bubble-in {
+  from { opacity: 0; transform: tr
+/* ─── FIELD NOTES — blue tint, battery mode ── */
+.state-field-notes { border-color: rgba(59, 130, 246, 0.4) !important;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 14px rgba(59,130,246,0.12) !important; }
+.state-field-notes #pill-icon { color: #3b82f6; animation: icon-breathe 3s ease-in-out infinite; }
+.state-field-notes #pill-status::after { content: 'Field Notes'; color: rgba(59,130,246,0.8); }
+
+/* ─── PAUSED — grey/dim ─────────────────────── */
+.state-paused { border-color: rgba(100, 100, 120, 0.3) !important; opacity: 0.55; }
+.state-paused #pill-icon { color: rgba(200,200,220,0.5); }
+.state-paused #pill-label { color: rgba(255,255,255,0.4); }
+.state-paused #pill-status::after { content: 'Pause'; color: rgba(200,200,220,0.5); }
+
+/* ─── MEETING mode ───────────────────────────── */
+.state-meeting { border-color: rgba(14, 165, 233, 0.4) !important;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.45), 0 0 14px rgba(14,165,233,0.12) !important; }
+.state-meeting #pill-icon { color: #0ea5e9; animation: icon-breathe 2s ease-in-out infinite; }
+.state-meeting #pill-status::after { content: 'Møde'; color: rgba(14,165,233,0.8); }
+
+/* ─── CODE BLOCKS ────────────────────────────── */
+.code-block {
+  background: rgba(10, 8, 25, 0.95);
+  border: 1px solid rgba(99, 85, 212, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 6px 0;
+  font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', 'Consolas', monospace;
+}
+
+.code-lang {
+  background: rgba(99, 85, 212, 0.25);
+  color: rgba(180, 170, 255, 0.8);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  border-bottom: 1px solid rgba(99, 85, 212, 0.2);
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.code-block code {
+  font-family: inherit;
+  font-size: 11.5px;
+  color: rgba(220, 215, 255, 0.95);
+  line-height: 1.6;
+  display: block;
+  white-space: pre;
+}
+
+/* ─── INLINE CODE ────────────────────────────── */
+.inline-code {
+  font-family: 'Cascadia Code', 'Fira Code', 'SF Mono', monospace;
+  font-size: 11px;
+  background: rgba(99, 85, 212, 0.2);
+  color: rgba(180, 170, 255, 0.95);
+  border: 1px solid rgba(99, 85, 212, 0.25);
+  border-radius: 4px;
+  padding: 1px 5px;
+}

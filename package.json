@@ -1,0 +1,19 @@
+{
+  "name": "grace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project Grace — Lokal AI-assistent",
+  "workspaces": [
+    "shared",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=packages/overlay",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "clean": "find . -name 'dist' -not -path '*/node_modules/*' -exec rm -rf {} + 2>/dev/null; echo done"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

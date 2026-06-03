@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+*.js.map
+*.d.ts.map
+# TS artifacts emitted next to sources (renderer/*.js is NOT under src/, so it's kept)
+packages/**/src/**/*.js
+packages/**/src/**/*.d.ts
+packages/**/src/**/*.cjs
+shared/src/**/*.js
+shared/src/**/*.d.ts
+
+# Secrets
+.env
+.env.local
+
+# Logs, runtime data, downloaded models (all regenerated)
+*.log
+logs/
+data/
+models/
+
+# Grace runtime data (on new machine)
+~/Grace/

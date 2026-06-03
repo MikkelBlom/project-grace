@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grace HUD</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="hud">
+
+    <!-- Conversation bubbles (appear above pill) -->
+    <div id="bubbles">
+      <div id="user-bubble" class="bubble user hidden"></div>
+      <div id="grace-bubble" class="bubble grace hidden">
+        <div id="dots" class="hidden">
+          <span></span><span></span><span></span>
+        </div>
+        <span id="grace-text"></span>
+      </div>
+    </div>
+
+    <!-- Notification strip -->
+    <div id="notification" class="hidden"></div>
+
+    <!-- The always-visible pill -->
+    <div id="pill" class="state-idle">
+      <div id="pulse-ring"></div>
+      <div id="pill-content">
+        <div id="pill-icon">◈</div>
+        <div id="pill-label">Grace</div>
+        <div id="pill-status"></div>
+      </div>
+    </div>
+
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

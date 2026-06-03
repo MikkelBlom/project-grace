@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Grace Vignette</title>
+<style>
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Vignette edge glow ── */
+#vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: box-shadow 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity    0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Resting state: barely visible purple tint so user can confirm the overlay is live */
+#vignette.state-idle {
+  opacity: 0.25;
+  box-shadow: inset 0 0 80px 20px rgba(99, 85, 212, 0.06);
+}
+
+/* State colours via box-shadow inset */
+#vignette.state-listening {
+  opacity: 1;
+  box-shadow: inset 0 0 120px 40px rgba(99, 85, 212, 0.18);
+  animation: vig-pulse-listening 2.4s ease-in-out infinite;
+}
+#vignette.state-thinking {
+  opacity: 1;
+  box-shadow: inset 0 0 120px 40px rgba(245, 158, 11, 0.16);
+  animation: vig-sweep-thinking 3s linear infinite;
+}
+#vignette.state-speaking {
+  opacity: 1;
+  box-shadow: inset 0 0 120px 40px rgba(26, 158, 108, 0.16);
+  animation: vig-wave-speaking 1.6s ease-in-out infinite;
+}
+#vignette.state-discreet {
+  opacity: 1;
+  box-shadow: inset 0 0 100px 30px rgba(220, 38, 38, 0.14);
+  /* static, no animation */
+}
+#vignette.state-field-notes {
+  opacity: 1;
+  box-shadow: inset 0 0 100px 30px rgba(59, 130, 246, 0.14);
+  animation: vig-pulse-listening 3.5s ease-in-out infinite;
+}
+/* idle = fully transparent — vignette only shows during active states */
+
+/* ── Focus box SVG layer ── */
+#focus-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ── Animations ── */
+@keyframes vig-pulse-listening {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1;   }
+}
+@keyframes vig-wave-speaking {
+  0%, 100% { opacity: 0.7; transform: scale(1);    }
+  50%       { opacity: 1;   transform: scale(1.003); }
+}
+@keyframes vig-sweep-thinking {
+  /* Very subtle rotating brightness — gives the impression of a slow sweep */
+  0%   { filter: hue-rotate(0deg);   }
+  100% { filter: hue-rotate(30deg);  }
+}
+
+/* ── Focus box elements ── */
+.focus-box-group {
+  position: absolute;
+  pointer-events: none;
+}
+
+.focus-box-rect {
+  fill: none;
+  stroke: #7c6af7;
+  stroke-width: 1.5;
+  /* SVG stroke-dashoffset draw-on animation */
+  stroke-dasharray: var(--perimeter);
+  stroke-dashoffset: var(--perimeter);
+  animation: box-draw 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.focus-box-rect.pulsing {
+  animation:
+    box-draw  0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards,
+    box-pulse 1.4s ease-in-out 0.4s infinite;
+}
+
+.focus-box-glow {
+  fill: rgba(99, 85, 212, 0.06);
+  stroke: none;
+  opacity: 0;
+  animation: box-glow-in 0.4s ease 0.15s forwards;
+}
+
+/* Corner dots */
+.focus-corner {
+  fill: #7c6af7;
+  r: 3;
+  opacity: 0;
+  animation: corner-pop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.focus-corner:nth-child(1) { animation-delay: 0.10s; }
+.focus-corner:nth-child(2) { animation-delay: 0.15s; }
+.focus-corner:nth-child(3) { animation-delay: 0.20s; }
+.focus-corner:nth-child(4) { animation-delay: 0.25s; }
+
+/* Label tooltip */
+.focus-label-group {
+  opacity: 0;
+  transform: translateY(-8px);
+  animation: label-slide-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.3s forwards;
+}
+
+.focus-label-bg {
+  fill: rgba(18, 14, 42, 0.88);
+  rx: 5;
+  ry: 5;
+}
+
+.focus-label-text {
+  fill: rgba(255, 255, 255, 0.92);
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Erase animation — box retracts */
+.focus-box-group.erasing .focus-box-rect {
+  animation: box-erase 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.focus-box-group.erasing .focus-label-group {
+  animation: label-slide-out 0.25s ease forwards;
+}
+.focus-box-group.erasing .focus-corner {
+  animation: corner-pop-out 0.2s ease forwards;
+}
+.focus-box-group.erasing .focus-box-glow {
+  animation: box-glow-out 0.3s ease forwards;
+}
+
+@keyframes box-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes box-erase {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: var(--perimeter); }
+}
+@keyframes box-pulse {
+  0%, 100% { stroke-opacity: 1;    stroke-width: 1.5; }
+  50%       { stroke-opacity: 0.55; stroke-width: 2.5; }
+}
+@keyframes box-glow-in {
+  to { opacity: 1; }
+}
+@keyframes box-glow-out {
+  to { opacity: 0; }
+}
+@keyframes corner-pop {
+  from { opacity: 0; transform: scale(0); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes corner-pop-out {
+  to { opacity: 0; transform: scale(0); }
+}
+@keyframes label-slide-in {
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes label-slide-out {
+  to { opacity: 0; transform: translateY(-6px); }
+}
+</style>
+</head>
+<body>
+
+<div id="vignette" class="state-idle"></div>
+<!-- starts as state-idle (faint resting glow), transitions to state-listening once Whisper is ready -->
+<svg id="focus-layer" xmlns="http://www.w3.org/2000/svg"></svg>
+
+<script>
+// ─── Vignette state ────────────────────────────────
+const vignette = document.getElementById('vignette');
+let vignetteState = 'idle';
+
+function setVignetteState(state) {
+  if (vignetteState === state) return;
+  vignette.className = '';
+  vignette.classList.add(`state-${state}`);
+  vignetteState = state;
+}
+
+// ─── Focus boxes ───────────────────────────────────
+const focusLayer = document.getElementById('focus-layer');
+const activeBoxes = new Map(); // id → { group, timer }
+let nextBoxId = 0;
+
+function createFocusBox({ x, y, w, h, label, duration = 4000, pulse = false }) {
+  const id = ++nextBoxId;
+  const perimeter = 2 * (w + h);
+
+  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  group.classList.add('focus-box-group');
+
+  // Glow fill
+  const glow = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  glow.classList.add('focus-box-glow');
+  glow.setAttribute('x', x);
+  glow.setAttribute('y', y);
+  glow.setAttribute('width', w);
+  glow.setAttribute('height', h);
+  glow.setAttribute('rx', '3');
+
+  // Animated border
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.classList.add('focus-box-rect');
+  if (pulse) rect.classList.add('pulsing');
+  rect.setAttribute('x', x + 1);
+  rect.setAttribute('y', y + 1);
+  rect.setAttribute('width', w - 2);
+  rect.setAttribute('height', h - 2);
+  rect.setAttribute('rx', '3');
+  rect.style.setProperty('--perimeter', perimeter);
+
+  // Corner dots (4 corners)
+  const corners = [
+    [x - 1, y - 1],
+    [x + w + 1, y - 1],
+    [x + w + 1, y + h + 1],
+    [x - 1, y + h + 1],
+  ];
+  const cornerEls = corners.map(([cx, cy]) => {
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.classList.add('focus-corner');
+    c.setAttribute('cx', cx);
+    c.setAttribute('cy', cy);
+    return c;
+  });
+
+  group.appendChild(glow);
+  group.appendChild(rect);
+  cornerEls.forEach(c => group.appendChild(c));
+
+  // Label tooltip
+  if (label) {
+    const PADDING = 8;
+    const LABEL_H = 20;
+    const approxW = label.length * 6.5 + PADDING * 2;
+
+    const labelGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    labelGroup.classList.add('focus-label-group');
+
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.classList.add('focus-label-bg');
+    bg.setAttribute('x', x);
+    bg.setAttribute('y', y - LABEL_H - 4);
+    bg.setAttribute('width', approxW);
+    bg.setAttribute('height', LABEL_H);
+
+    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    txt.classList.add('focus-label-text');
+    txt.setAttribute('x', x + PADDING);
+    txt.setAttribute('y', y - LABEL_H - 4 + 14);
+    txt.textContent = label;
+
+    labelGroup.appendChild(bg);
+    labelGroup.appendChild(txt);
+    group.appendChild(labelGroup);
+  }
+
+  focusLayer.appendChild(group);
+
+  // Auto-dismiss with reverse animation
+  const timer = setTimeout(() => dismissBox(id), duration);
+  activeBoxes.set(id, { group, timer });
+
+  return id;
+}
+
+function dismissBox(id) {
+  const entry = activeBoxes.get(id);
+  if (!entry) return;
+  const { group, timer } = entry;
+  clearTimeout(timer);
+  activeBoxes.delete(id);
+
+  // Trigger erase animation, then remove from DOM
+  group.classList.add('erasing');
+  setTimeout(() => group.remove(), 400);
+}
+
+function clearAllBoxes() {
+  for (const [id] of activeBoxes) dismissBox(id);
+}
+
+// ─── IPC from main process ─────────────────────────
+if (window.vignette) {
+  console.log('[Grace Vignette] ✅ IPC bridge ready');
+  window.vignette.onState((state) => {
+    console.log('[Grace Vignette] state →', state);
+    setVignetteState(state);
+  });
+  window.vignette.onFocusBox(createFocusBox);
+  window.vignette.onClearFocusBoxes(clearAllBoxes);
+  // Start in listening state immediately — don't wait for the IPC event
+  // (the event may have fired before this renderer was ready)
+  setVignetteState('listening');
+} else {
+  // No IPC — show a faint idle glow so it's at least visible for debugging
+  console.warn('[Grace Vignette] ❌ window.vignette is undefined — preload not loaded?');
+  setVignetteState('listening'); // Force visible so we can see the window exists
+}
+</script>
+</body>
+</html>
