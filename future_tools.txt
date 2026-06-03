@@ -1,0 +1,1 @@
+To be truly useful, I'd love access to a code execution environment to test the logic I write for you, a way to interact with your calendar to manage your schedule, and perhaps a way to control your smart home devices so I can actually adjust the lighting while we work.

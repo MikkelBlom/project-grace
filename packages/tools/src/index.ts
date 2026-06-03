@@ -146,7 +146,9 @@ registerTool({
     const os = await import('os');
     const fs = await import('fs/promises');
     const path = await import('path');
-    const q = String(args.query ?? '').toLowerCase();
+    // Fuzzy match: treat hyphens/underscores/extra spaces the same ("AI-automation" ~ "AI automation").
+    const norm = (s: string) => s.toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const q = norm(String(args.query ?? ''));
     let root = args.root ? String(args.root) : os.homedir();
     const rl = root.toLowerCase().trim();
     if (!args.root || rl === 'home' || rl === '~' || rl === '.' || rl === '') root = os.homedir();
@@ -167,7 +169,7 @@ registerTool({
         const full = path.join(dir, e.name);
         const isDir = e.isDirectory();
         // Empty query => list the top level (depth 0). Otherwise match files AND folders by name.
-        const match = q ? e.name.toLowerCase().includes(q) : depth === 0;
+        const match = q ? norm(e.name).includes(q) : depth === 0;
         if (match) hits.push({ path: full, type: isDir ? 'folder' : 'file' });
         if (isDir && !skip.has(e.name) && !e.name.startsWith('.')) await walk(full, depth + 1);
       }
@@ -227,8 +229,12 @@ registerTool({
   },
   async run(args) {
     const fs = await import('fs/promises');
-    const p = String(args.path ?? '');
-    if (!p) throw new Error('path is required');
+    const os = await import('os');
+    const path = await import('path');
+    const raw = String(args.path ?? '');
+    if (!raw) throw new Error('path is required');
+    const home = path.resolve(os.homedir());
+    const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
     const n = Number(args.lines);
     const maxLines = args.lines != null && Number.isFinite(n) ? Math.max(1, Math.min(200, Math.floor(n))) : 40;
     let data: string;
@@ -289,8 +295,10 @@ registerTool({
     const os = await import('os');
     const fs = await import('fs/promises');
     const path = await import('path');
-    const p = path.resolve(String(args.path ?? ''));
     const home = path.resolve(os.homedir());
+    const raw = String(args.path ?? '');
+    // Resolve relative paths under HOME (not the app's cwd): "Downloads/x.txt" => ~/Downloads/x.txt.
+    const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
     if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be written.` };
     const content = String(args.content ?? '');
     try {
@@ -299,6 +307,33 @@ registerTool({
       else await fs.writeFile(p, content, 'utf-8');
       return { path: p, bytes: Buffer.byteLength(content, 'utf-8'), mode: args.append ? 'append' : 'overwrite', ok: true };
     } catch (e) { return { path: p, error: String(e) }; }
+  },
+});
+
+// 8) Move / rename a file (so Grace relocates files instead of re-creating them).
+registerTool({
+  name: 'move_file',
+  description: 'Move or RENAME a file. Both source and destination must be under the home folder. If the destination is an existing folder, the original filename is kept. Use this to relocate a file instead of recreating it.',
+  params: {
+    from: { type: 'string', description: 'current absolute path of the file', required: true },
+    to: { type: 'string', description: 'destination absolute path, or a folder to move it into', required: true },
+  },
+  async run(args) {
+    const os = await import('os');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const home = path.resolve(os.homedir());
+    const underHome = (s: string) => { const r = String(s ?? ''); return r && (path.isAbsolute(r) ? path.resolve(r) : path.resolve(home, r)); };
+    const from = underHome(args.from);
+    let to = underHome(args.to);
+    if (!from || !to) return { error: 'both from and to are required' };
+    if (!from.startsWith(home) || !to.startsWith(home)) return { error: 'Both paths must be under the home folder.' };
+    try {
+      try { const st = await fs.stat(to); if (st.isDirectory()) to = path.join(to, path.basename(from)); } catch { /* to does not exist yet */ }
+      await fs.mkdir(path.dirname(to), { recursive: true });
+      await fs.rename(from, to);
+      return { from, to, ok: true };
+    } catch (e) { return { from, to, error: String(e) }; }
   },
 });
 
