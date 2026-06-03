@@ -3,13 +3,14 @@
 _Updated: 2026-06-03 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 
 > Backlog + guides: **ROADMAP.md**, **docs/architecture.md**, **docs/adding-tools.md**,
-> **docs/working-with-other-ai.md**.
+> **docs/working-with-other-ai.md**, **docs/implement-prompt.md** (paste-in agent prompt).
 
 ## Working & verified ✅
 - GPU I/O loop: Whisper large-v3 (lang `auto`) → gemma4:26b (think:false) → Kokoro `af_heart`.
   Mic = Realtek (Buds4 stay A2DP stereo for output — the audio/HFP issue is solved).
-- **Tools** (`@grace/tools`): get_weather, get_location, search_files, web_search, read_file,
-  fetch_url (full pages), **write_file** (gated to home), task_status, start_background_task.
+- **Tools** (`@grace/tools`): get_weather, get_location, **search_files** (fuzzy), web_search,
+  read_file, fetch_url, **write_file** + **move_file** (gated to home; relative paths resolve under
+  home — fixed a bug where files landed in the app dir), task_status, start_background_task.
 - **Multi-step tool loop** (self-correcting, stateful navigation, acts-not-narrates) and
   **autonomous background tasks** (plan→execute→verify→report). Both verified headless.
 - Personality-as-data + anti-fabrication + **capability honesty** (no claiming tools she lacks).

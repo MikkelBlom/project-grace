@@ -40,11 +40,15 @@ for info (weather/web) the way any assistant does.
   the earbuds stay A2DP stereo for output. This is the "sound switches" cause.
 
 ### P1 — Tools (the toolbox; see `docs/adding-tools.md` for the wishlist with specs)
-- `list_dir`, `run_command` (sandboxed allowlist), `open_path` (launch file/folder/app),
-  `clipboard_read`/`clipboard_write`, `take_screenshot` (+ vision via LLaVA), `create_reminder`,
-  `app_context` (what window is focused), `system_volume`/`media_control`, `write_file`/`append_file`.
-- **Multiple tool calls per turn** — let the model emit a list `[ {tool,args}, ... ]` so
-  "location AND weather" run together. Parse + run in parallel, feed all results back.
+- ✅ done: `write_file`, `move_file`, `read_file`, `fetch_url`, fuzzy `search_files`.
+- Next easy ones: `list_dir`, `delete_file` (gated + confirm), `open_path` (launch file/folder/app),
+  `clipboard_read`/`clipboard_write`, `app_context` (focused window), `system_volume`/`media_control`,
+  `take_screenshot` (+ vision via LLaVA), `create_reminder`, `run_command` (sandboxed allowlist).
+- **Filesystem navigation index** — Grace keeps getting lost and needing exact paths from Mikkel.
+  Build a persistent index of his folders/projects (cached scan under home, refreshable) + a
+  `find_path(name)` tool returning ranked matches anywhere. Kills the "guide me to the path" loops.
+- **Multiple tool calls per turn** — model emits `[ {tool,args}, ... ]` so "location AND weather"
+  run together. Parse + run in parallel, feed all results back.
 
 ### P2 — Autonomy & agency
 - **Scheduled / recurring tasks** (e.g. "every morning summarise my calendar"): a real job queue.
@@ -89,3 +93,13 @@ for info (weather/web) the way any assistant does.
 3. **P1 `take_screenshot` + LLaVA vision** (lets Grace *see* the screen — big capability).
 4. **P3 STT auto-lang** (one-line experiment).
 5. **P4 better-sqlite3**, then **P2 scheduler**, then **P5 self-expansion**.
+
+---
+
+## Notes from live sessions
+- **Multi-step latency:** deep tool chains take a few seconds per step (each step = one LLM call);
+  a hard search hit ~30s once. The **filesystem index** + **multiple-tools-per-turn** would cut this.
+- **web_search** is weak for *very recent* Danish news (DuckDuckGo). Pattern that works: `web_search`
+  for a URL, then `fetch_url` to read the actual article.
+- **Grace's own tool wishlist** (volunteered, unprompted): a **code-execution sandbox** (to test logic
+  she writes — see P4/P5), **calendar** access, and **smart-home / IoT** control. Good priority signal.
