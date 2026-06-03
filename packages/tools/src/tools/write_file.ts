@@ -3,11 +3,11 @@ import { registerTool } from '../registry.js';
 // Create / write a text file (gated to the user's home folder for safety).
 registerTool({
   name: 'write_file',
-  description: 'Create or write a TEXT file on disk (notes, ideas, code, etc). Only allowed under the user home folder. Set append:true to add to an existing file instead of overwriting it.',
+  description: 'Create or write a TEXT file on disk (notes, ideas, code). DANGER: By default this OVERWRITES the entire file, deleting existing content! Use mode="append" to add to the bottom, or mode="prepend" to add to the top.',
   params: {
     path: { type: 'string', description: 'absolute path of the file to write (must be under the home folder)', required: true },
     content: { type: 'string', description: 'the text content to write', required: true },
-    append: { type: 'boolean', description: 'append instead of overwrite (optional, default false)' },
+    mode: { type: 'string', description: '"overwrite" (default: DELETES existing content), "append" (adds to bottom), or "prepend" (adds to top)' },
   },
   async run(args) {
     const os = await import('os');
@@ -21,9 +21,20 @@ registerTool({
     const content = String(args.content ?? '');
     try {
       await fs.mkdir(path.dirname(p), { recursive: true });
-      if (args.append) await fs.appendFile(p, content, 'utf-8');
-      else await fs.writeFile(p, content, 'utf-8');
-      return { path: p, bytes: Buffer.byteLength(content, 'utf-8'), mode: args.append ? 'append' : 'overwrite', ok: true };
+      
+      let finalMode = args.mode || (args.append ? 'append' : 'overwrite');
+      
+      if (finalMode === 'append') {
+        await fs.appendFile(p, content, 'utf-8');
+      } else if (finalMode === 'prepend') {
+        let existing = '';
+        try { existing = await fs.readFile(p, 'utf-8'); } catch (e) { /* ignore */ }
+        await fs.writeFile(p, content + existing, 'utf-8');
+      } else {
+        await fs.writeFile(p, content, 'utf-8');
+      }
+      
+      return { path: p, bytes: Buffer.byteLength(content, 'utf-8'), mode: finalMode, ok: true };
     } catch (e) { return { path: p, error: String(e) }; }
   },
 });
