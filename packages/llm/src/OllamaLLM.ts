@@ -20,7 +20,7 @@ import { bus } from '@grace/core';
 import path from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { describeTools, parseToolCall, runTool } from '@grace/tools';
+import { describeTools, parseToolCall, runTool, TaskRegistry } from '@grace/tools';
 
 const OLLAMA_URL  = process.env.GRACE_OLLAMA_URL  ?? 'http://localhost:11434';
 const MODEL       = process.env.GRACE_LLM_MODEL   ?? 'gemma4:26b';
@@ -233,6 +233,14 @@ export class OllamaLLM {
             continue;
           }
 
+          // Autonomous background task: acknowledge now, then work on it on our own.
+          if (call.tool === 'start_background_task') {
+            const desc = String((call.args && (call.args as Record<string, unknown>).description) || text);
+            void this.runBackgroundTask(desc);
+            finalText = "On it — I'll dig into that on my own and let you know when I'm done.";
+            break;
+          }
+
           const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           console.log(`[OllamaLLM] 🔧 step ${step + 1}: ${call.tool}`, call.args);
           bus.emit('overlay:notification', { text: `🔧 ${call.tool}`, level: 'info', duration: 2000 });
@@ -288,7 +296,7 @@ export class OllamaLLM {
   }
 
   // ── Multi-step completion (non-streaming, system prompt + think:false) ──
-  private async complete(messages: Array<{ role: string; content: string }>): Promise<string> {
+  private async complete(messages: Array<{ role: string; content: string }>, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
     const norm = messages.map(m => ({
       role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
       content: m.content,
@@ -298,7 +306,7 @@ export class OllamaLLM {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: this.model,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...norm],
+        messages: [{ role: 'system', content: systemPrompt }, ...norm],
         stream: false,
         think: false,
         options: { temperature: 0.5, top_p: 0.9, num_ctx: 32768, num_predict: 1024 },
@@ -308,6 +316,62 @@ export class OllamaLLM {
     if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
     const data = await res.json() as { message?: { content?: string } };
     return data.message?.content?.trim() ?? '';
+  }
+
+  // ── Autonomous background task: plan → execute → verify → report back ──
+  private async runBackgroundTask(description: string): Promise<void> {
+    TaskRegistry.start(description);
+    const announce = (text: string) => {
+      const sid = `task-${Date.now()}`;
+      bus.emit('llm:response', { text, sessionId: sid, model: this.model, spoken: true });
+      bus.emit('tts:speaking', { text, sessionId: sid });
+    };
+    // Task-mode system prompt: no <SKIP>, no chit-chat — execute and verify.
+    const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are autonomously executing a task for Mikkel. ` +
+      `Work step by step with tools. NEVER reply <SKIP>. Do not chit-chat or ask questions. Either output ONE ` +
+      `tool-call JSON, or — only when the task is fully done and verified — a concise final summary with NO JSON.`;
+    try {
+      TaskRegistry.update('planning');
+      const plan = await this.complete([{ role: 'user',
+        content: `Make a short numbered plan (max 5 steps) to accomplish this with your tools. Plan only — no tool calls yet.\nTASK: ${description}` }], taskSys);
+      TaskRegistry.log('made a plan');
+
+      const work: Array<{ role: string; content: string }> = [{ role: 'user',
+        content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. Final concise summary with NO JSON when truly done.\nTASK: ${description}\nYOUR PLAN:\n${plan}` }];
+
+      let result = '';
+      const MAX = 14;
+      for (let step = 0; step < MAX; step++) {
+        TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
+        const reply = await this.complete(work, taskSys);
+        const call = parseToolCall(reply);
+        if (!call) {
+          // Reject <SKIP>/empty as a result — keep executing.
+          if (reply.trim() && !SKIP_RE.test(reply)) { result = reply; break; }
+          work.push({ role: 'user', content: 'Do not stop or reply <SKIP>. Call the next tool, or give the final verified summary now.' });
+          continue;
+        }
+        if (call.tool === 'start_background_task') { // already in a task — don't recurse
+          work.push({ role: 'user', content: 'You are already working on the task. Use real tools or finish.' });
+          continue;
+        }
+        const res = await runTool(call.tool, call.args);
+        TaskRegistry.log(`${call.tool} → ${JSON.stringify(res).slice(0, 90)}`);
+        work.push({ role: 'assistant', content: reply });
+        work.push({ role: 'user', content:
+          `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 1800)}\n` +
+          `Keep going until the task is fully done AND verified, then give a concise final summary with NO JSON.` });
+      }
+      if (!result.trim()) {
+        result = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did, in plain English. No tools, no JSON.' }], taskSys);
+      }
+      TaskRegistry.finish(result || 'Done.');
+      bus.emit('overlay:notification', { text: '✅ Task done', level: 'info', duration: 5000 });
+      announce(`Okay, I'm done. ${result || ''}`.trim());
+    } catch (err) {
+      TaskRegistry.fail(String(err));
+      announce(`I hit a problem with that task: ${err}`);
+    }
   }
 
   // ── Core chat method ─────────────────────────

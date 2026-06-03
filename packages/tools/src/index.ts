@@ -275,3 +275,45 @@ registerTool({
     return { url, title, chars: text.length, text: text.slice(0, cap) };
   },
 });
+
+// ── Background-task registry (for autonomous "I'll get back to you" work) ──
+export interface TaskState {
+  id: string; description: string; phase: string; log: string[];
+  result?: string; done: boolean; failed?: boolean; startedAt: number;
+}
+class TaskRegistryImpl {
+  current: TaskState | null = null;
+  start(description: string): TaskState {
+    this.current = { id: 'task-' + Date.now(), description, phase: 'planning', log: [], done: false, startedAt: Date.now() };
+    return this.current;
+  }
+  update(phase: string): void { if (this.current && !this.current.done) this.current.phase = phase; }
+  log(line: string): void { if (this.current) { this.current.log.push(line); if (this.current.log.length > 25) this.current.log.shift(); } }
+  finish(result: string): void { if (this.current) { this.current.result = result; this.current.done = true; this.current.phase = 'done'; } }
+  fail(err: string): void { if (this.current) { this.current.failed = true; this.current.done = true; this.current.phase = 'failed'; this.current.result = err; } }
+  isRunning(): boolean { return !!this.current && !this.current.done; }
+  status(): string {
+    const t = this.current;
+    if (!t) return 'No task is running and none has run yet.';
+    const secs = Math.round((Date.now() - t.startedAt) / 1000);
+    if (t.done) return t.failed ? `The last task failed: ${t.result}` : `That task is finished. Result: ${t.result}`;
+    return `Still working on "${t.description}" — currently ${t.phase}, about ${secs} seconds in. Recently: ${t.log.slice(-2).join('; ') || 'getting started'}.`;
+  }
+}
+export const TaskRegistry = new TaskRegistryImpl();
+
+// Report progress of the running background task (so Mikkel can interrupt to ask).
+registerTool({
+  name: 'task_status',
+  description: 'Report the progress of the background task you are currently working on. Use this whenever Mikkel asks how far along you are / what you are doing.',
+  params: {},
+  async run() { return { status: TaskRegistry.status() }; },
+});
+
+// Kick off a LONG autonomous task (intercepted by the LLM layer, which acks then works in the background).
+registerTool({
+  name: 'start_background_task',
+  description: 'Start a LONG, multi-step task that you should work on autonomously in the background (e.g. "find X, dig through it and report", "research Y and summarise"). You will acknowledge immediately, then plan, execute and verify on your own, and report back when done. Do NOT use this for quick questions or single lookups.',
+  params: { description: { type: 'string', description: 'a clear, self-contained description of the task to perform', required: true } },
+  async run(args) { return { started: true, description: String((args && args.description) || '') }; },
+});
