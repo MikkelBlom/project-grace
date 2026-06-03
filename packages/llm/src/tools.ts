@@ -150,6 +150,8 @@ registerTool({
     let root = args.root ? String(args.root) : os.homedir();
     const rl = root.toLowerCase().trim();
     if (!args.root || rl === 'home' || rl === '~' || rl === '.' || rl === '') root = os.homedir();
+    else if (rl.startsWith('home/') || rl.startsWith('home\\')) root = path.join(os.homedir(), root.slice(5));
+    else if (rl.startsWith('~/') || rl.startsWith('~\\')) root = path.join(os.homedir(), root.slice(2));
     else if (!path.isAbsolute(root)) root = path.join(os.homedir(), root);
     const skip = new Set(['node_modules', '.git', 'AppData', '$Recycle.Bin', 'Windows', 'ProgramData', '.cache']);
     const hits: Array<{ path: string; type: 'file' | 'folder' }> = [];

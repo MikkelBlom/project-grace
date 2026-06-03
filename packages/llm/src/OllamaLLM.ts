@@ -118,6 +118,8 @@ export class OllamaLLM {
   private model: string;
   private baseUrl: string;
   private isAvailable = false;
+  /** Compact memory of the most recent tool result, injected next turn for folder navigation. */
+  private lastToolContext = '';
 
   constructor(model = MODEL, baseUrl = OLLAMA_URL) {
     this.model = model;
@@ -218,18 +220,29 @@ export class OllamaLLM {
             role: h.role === 'assistant' || h.role === 'grace' ? 'assistant' : 'user',
             content: h.content,
           })),
+          // Carry the previous tool result so "go into that folder" keeps its place.
+          ...(this.lastToolContext ? [{
+            role: 'user',
+            content: `CONTEXT — your most recent tool result was:\n${this.lastToolContext}\n` +
+              `When Mikkel refers to "that folder", "go deeper", or "the one you mentioned", reuse the FULL absolute path from this result as the search 'root'.`,
+          }] : []),
           { role: 'user', content: text },
         ];
         const MAX_STEPS = 5;
         let finalText: string | null = null;
+        let lastToolNote = '';
 
         for (let step = 0; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
           const call = parseToolCall(reply);
           if (!call) {
-            if (reply.trim()) { finalText = reply; break; }
-            // Empty reply — nudge once instead of going silent.
-            work.push({ role: 'user', content: 'You replied with nothing. Either call a tool (one line of JSON) to get what is needed, or give Mikkel a plain-English answer now.' });
+            // Refuse a "promise to act" (or an empty reply) as the final answer —
+            // push her to emit the tool call instead of narrating intent.
+            const narrating = /\b(let me|i'?ll|i will|let'?s|i'?m going to|lad mig|jeg vil|jeg skal)\b[\s\S]{0,40}\b(search|find|look|check|see|fetch|tjek|kig|find|søg|lede|tjekke)\b/i.test(reply);
+            if (reply.trim() && !narrating) { finalText = reply; break; }
+            work.push({ role: 'user', content: narrating
+              ? 'Do NOT narrate what you are about to do. Output the tool call JSON RIGHT NOW to actually do it.'
+              : 'You replied with nothing. Either output a tool call (one line of JSON), or give Mikkel a plain-English answer now.' });
             continue;
           }
 
@@ -241,14 +254,17 @@ export class OllamaLLM {
           const result = await runTool(call.tool, call.args);
           bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
 
+          const resultJson = JSON.stringify(result);
+          lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 700)}`;
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content:
-            `TOOL RESULT (${call.tool}): ${JSON.stringify(result)}\n` +
+            `TOOL RESULT (${call.tool}): ${resultJson}\n` +
             `If this is empty or an error, you MUST try again with a corrected query or a different tool (output a NEW tool JSON) — ` +
             `do not give up after one attempt. Danish folder names are English on disk: overførsler→Downloads, ` +
-            `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. Only once you actually have the info, ` +
-            `answer Mikkel in plain English with NO JSON.` });
+            `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. To go DEEPER into a folder, reuse the full ` +
+            `absolute 'path' from a match above as the 'root'. Only once you actually have the info, answer Mikkel in plain English with NO JSON.` });
         }
+        if (lastToolNote) this.lastToolContext = lastToolNote;
 
         if (finalText === null || !finalText.trim()) {
           finalText = await this.complete([...work, {
