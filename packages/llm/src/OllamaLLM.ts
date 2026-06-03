@@ -20,7 +20,7 @@ import { bus } from '@grace/core';
 import path from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { describeTools, parseToolCall, runTool } from './tools.js';
+import { describeTools, parseToolCall, runTool } from '@grace/tools';
 
 const OLLAMA_URL  = process.env.GRACE_OLLAMA_URL  ?? 'http://localhost:11434';
 const MODEL       = process.env.GRACE_LLM_MODEL   ?? 'gemma4:26b';
