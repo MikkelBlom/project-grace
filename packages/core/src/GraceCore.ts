@@ -32,7 +32,7 @@ export class GraceCore {
 
   private init(): void {
     // Restore recent conversation so context + memory survive restarts.
-    const restored = this.memory.recentTurns(8);
+    const restored = this.memory.recentTurns(4);
     if (restored.length) {
       this.history = restored.map(t => ({
         role: t.role, content: t.content,
@@ -203,12 +203,14 @@ export class GraceCore {
 
   /** A spoken greeting for startup; recalls the previous session if there was one. */
   getStartupGreeting(): string {
-    const recall = this.memory.lastSessionRecall(this.sessionId);
-    if (recall) {
-      const s = recall.length > 90 ? recall.slice(0, 87) + '...' : recall;
-      return `Hey Mikkel, Grace is back online. Last time you were on about: ${s}. Want to pick that back up, or start fresh?`;
-    }
-    return `Hey Mikkel, Grace here — online and ready to go.`;
+    // A warm, varied greeting — not a verbatim parrot of the last message.
+    const lines = [
+      'Hey Mikkel, Grace is back online. What are we working on?',
+      'Grace here, booted and ready. What do you need?',
+      'Back online. Pick up where we left off, or start something new?',
+      'Hey Mikkel, I am up and ready to go. What is on your mind?',
+    ];
+    return lines[Math.floor(Math.random() * lines.length)]!;
   }
 
   getMode(): GraceMode { return this.mode; }

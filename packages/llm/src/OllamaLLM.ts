@@ -198,19 +198,6 @@ export class OllamaLLM {
     bus.on('llm:thinking', async ({ sessionId, text, history }) => {
       if (!text) return; // Guard — no input to respond to
 
-      // Speak complete sentences from the final answer (GPU TTS keeps this smooth).
-      const flushSentences = (buf: string): number => {
-        const re = /[^.!?…]+[.!?…]+["')\]]*(?:\s|$)/g;
-        let consumed = 0;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(buf)) !== null) {
-          const s = m[0].trim();
-          if (s) bus.emit('tts:speaking', { text: s, sessionId });
-          consumed = re.lastIndex;
-        }
-        return consumed;
-      };
-
       try {
         // ── Multi-step agentic loop ──────────────────────────────────
         // Grace can chain tool calls: try → read result → adjust → retry,
@@ -279,10 +266,9 @@ export class OllamaLLM {
           return;
         }
 
-        // Speak the final answer, sentence by sentence.
-        const consumed = flushSentences(finalText);
-        const tail = finalText.slice(consumed).trim();
-        if (tail) bus.emit('tts:speaking', { text: tail, sessionId });
+        // ONE audio clip per reply (GPU synth is fast) — per-sentence clips were
+        // dropping mid-reply over Bluetooth. A single clip plays through cleanly.
+        bus.emit('tts:speaking', { text: finalText, sessionId });
         bus.emit('llm:response', { text: finalText, sessionId, model: this.model, spoken: true });
       } catch (err) {
         console.error('[OllamaLLM] Chat error:', err);
