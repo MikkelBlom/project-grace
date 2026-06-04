@@ -40,3 +40,4 @@ import './tools/roll_dice.js';
 import './tools/news_fetcher.js';
 import './tools/word_counter.js';
 import './tools/temperature_converter.js';
+import './tools/date_difference_calculator.js';
