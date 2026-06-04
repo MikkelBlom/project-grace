@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────
 
 import { bus } from '@grace/core';
+import os from 'os';
 import path from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -98,7 +99,36 @@ function loadPersonality(): string {
 // Marker Grace emits when she chooses NOT to reply (filler / one-word / not addressed).
 const SKIP_RE = /^[\s.<>*"'`]*skip[\s.<>*"'`]*$/i;
 
-const SYSTEM_PROMPT = [loadPersonality(), describeTools()].filter(Boolean).join('\n\n');
+// Tools that change the filesystem — after one runs, Grace must verify before claiming success.
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'move_file', 'delete_file']);
+
+// Real machine facts injected into the prompt so Grace stops guessing paths / usernames.
+function describeEnvironment(): string {
+  let home = '', user = '';
+  try { home = os.homedir(); } catch { /* ignore */ }
+  try { user = os.userInfo().username; } catch { /* ignore */ }
+  const sep = path.sep;
+  const f = (name: string) => `${home}${sep}${name}`;
+  return [
+    'ENVIRONMENT — FACTS about this machine. Use these EXACT paths; never invent a username or guess a path:',
+    `- OS: ${os.platform()} ${os.release()}`,
+    `- The Windows username is "${user}", so the home folder is "${home}". Mikkel's name is Mikkel, but his user folder is "${user}" — NEVER write C:\\Users\\mikkel or any other spelling.`,
+    `- Started: ${new Date().toString()}`,
+    'Standard folders (Danish name → real path):',
+    `- skrivebord / desktop → ${f('Desktop')}`,
+    `- overførsler / hentede filer / downloads → ${f('Downloads')}`,
+    `- dokumenter / documents → ${f('Documents')}`,
+    `- billeder / pictures → ${f('Pictures')}`,
+    `- musik → ${f('Music')} · videoer → ${f('Videos')}`,
+    '',
+    'FILE WORK — how to touch files safely:',
+    '- Locate with search_files, read with read_file, then change with edit_file (surgical replace).',
+    '- write_file is ONLY for creating a new file or fully replacing a small one. Its "overwrite" mode DELETES everything not in "content" — never overwrite a file you only read part of (read_file sets "truncated": true when your view is partial).',
+    '- After ANY write/edit/move/delete, VERIFY: re-read the file (read_file) or list the folder (list_dir) and confirm the change is complete (e.g. totalLines is what you expect) BEFORE telling Mikkel it is done.',
+  ].join('\n');
+}
+
+const SYSTEM_PROMPT = [loadPersonality(), describeEnvironment(), describeTools()].filter(Boolean).join('\n\n');
 
 interface OllamaMessage {
   role: 'system' | 'user' | 'assistant';
@@ -227,44 +257,47 @@ export class OllamaLLM {
           
           if (!call) {
             work.push({ role: 'assistant', content: reply });
-            work.push({ role: 'user', content: 'You MUST output valid JSON matching the required {"thought": "...", "tool": "...", "args": {...}, "speak": "...", "done": false} schema. Do not output plain text.' });
+            work.push({ role: 'user', content: 'You MUST output valid JSON matching {"thought":"...","tool":"...","args":{...},"speak":"...","done":false}. Do not output plain text.' });
             continue;
           }
 
-          if (call.speak && call.speak.trim()) {
-            allSpoken.push(call.speak.trim());
-          }
+          if (call.speak && call.speak.trim()) allSpoken.push(call.speak.trim());
 
-          if (!call.tool || call.tool === 'null' || call.tool === 'reply') {
-            // She doesn't want to call a tool, she just wants to speak. Turn is done.
-            break;
-          }
+          if (call.calls.length === 0) break; // just speaking — turn is done
 
-          if (call.tool === 'start_background_task') {
-            const desc = String((call.args && (call.args as Record<string, unknown>).description) || text);
+          // Background task is special: fire it and return (don't batch it with reads).
+          const bg = call.calls.find(c => c.tool === 'start_background_task');
+          if (bg) {
+            const desc = String((bg.args as Record<string, unknown>)?.description || text);
             void this.runBackgroundTask(desc);
             if (!call.speak) allSpoken.push("On it — I'll dig into that on my own and let you know when I'm done.");
             break;
           }
 
-          const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          console.log(`[OllamaLLM] 🔧 step ${step + 1}: ${call.tool}`, call.args);
-          bus.emit('overlay:notification', { text: `🔧 ${call.tool}`, level: 'info', duration: 2000 });
-          bus.emit('tool:execute', { name: call.tool, args: call.args, callId });
-          const started = Date.now();
-          const result = await runTool(call.tool, call.args);
-          bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
-          console.log(`[OllamaLLM]    ↳ ${Date.now() - started}ms · ${JSON.stringify(result).slice(0, 160)}`);
+          // Run all requested tools (independent → parallel), feed every result back.
+          const runs = await Promise.all(call.calls.map(async (c) => {
+            const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            console.log(`[OllamaLLM] 🔧 step ${step + 1}: ${c.tool}`, c.args);
+            bus.emit('overlay:notification', { text: `🔧 ${c.tool}`, level: 'info', duration: 2000 });
+            bus.emit('tool:execute', { name: c.tool, args: c.args, callId });
+            const started = Date.now();
+            const result = await runTool(c.tool, c.args);
+            bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
+            console.log(`[OllamaLLM]    ↳ ${Date.now() - started}ms · ${JSON.stringify(result).slice(0, 160)}`);
+            return { tool: c.tool, args: c.args, result };
+          }));
 
-          const resultJson = JSON.stringify(result);
-          lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 128000)}`;
+          const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.result).slice(0, 128000)}`).join('\n');
+          lastToolNote = runs.map(r => `${r.tool}(${JSON.stringify(r.args)}) → ${JSON.stringify(r.result).slice(0, 128000)}`).join('\n');
+          const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
+            ? 'You changed a file — VERIFY it now with read_file/list_dir (check totalLines) before claiming success. ' : '';
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content:
-            `TOOL RESULT (${call.tool}): ${resultJson}\n` +
-            `If this is empty or an error, you MUST try again with a corrected query or a different tool (output a NEW tool JSON) — ` +
-            `do not give up after one attempt. Danish folder names are English on disk: overførsler→Downloads, ` +
-            `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. To go DEEPER into a folder, reuse the full ` +
-            `absolute 'path' from a match above as the 'root'. When you have the info, finish by outputting a JSON with {"thought": "...", "tool": null, "speak": "your answer"}.` });
+            `${combined}\n` +
+            `If a result is empty or an error, retry with a corrected query or a different tool — don't give up after one attempt. ` +
+            `To go deeper into a folder, reuse the full absolute path from a match above as the next 'root'. ` +
+            `${verify}` +
+            `When you have what you need, reply with {"thought":"...","tool":null,"speak":"your answer"}.` });
         }
         if (lastToolNote) this.lastToolContext = lastToolNote;
 
@@ -367,37 +400,38 @@ export class OllamaLLM {
         if (!call) {
           console.warn(`[Task] ⚠️ Invalid JSON reply from model: ${reply}`);
           work.push({ role: 'assistant', content: reply });
-          work.push({ role: 'user', content: 'You MUST output valid JSON matching the {"thought": "...", "tool": "...", "args": {...}, "speak": "...", "done": false} schema.' });
+          work.push({ role: 'user', content: 'You MUST output valid JSON matching {"thought":"...","tool":"...","args":{...},"speak":"...","done":false}.' });
+          continue;
+        }
+
+        // Run any requested tools FIRST so "done" can never skip an unrun action.
+        const calls = call.calls.filter(c => c.tool !== 'start_background_task'); // no recursion into another task
+        if (calls.length > 0) {
+          const runs = await Promise.all(calls.map(async (c) => {
+            const tStep = Date.now();
+            const res = await runTool(c.tool, c.args);
+            console.log(`[Task]    step ${step + 1}: ${c.tool}(${JSON.stringify(c.args).slice(0, 80)}) ${Date.now() - tStep}ms → ${JSON.stringify(res).slice(0, 120)}`);
+            TaskRegistry.log(`${c.tool} → ${JSON.stringify(res).slice(0, 90)}`);
+            return { tool: c.tool, res };
+          }));
+          const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 128000)}`).join('\n');
+          const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
+            ? 'You changed a file — you MUST now VERIFY with read_file/list_dir (check totalLines matches what you intended) before setting "done": true. ' : '';
+          work.push({ role: 'assistant', content: reply });
+          work.push({ role: 'user', content:
+            `${combined}\n${verify}` +
+            `Keep going until the task is fully done AND verified, then finish with "done": true and your summary in "speak".` });
           continue;
         }
 
         if (call.done) {
-           // Task done. The result is in call.speak.
-           result = call.speak || 'Task finished without description.';
-           break;
+          result = call.speak || 'Task finished without description.';
+          break;
         }
 
-        if (!call.tool || call.tool === 'null' || call.tool === 'reply') {
-           // She just spoke without a tool and without setting done:true.
-           // That's fine, it's just "thinking out loud".
-           work.push({ role: 'assistant', content: reply });
-           work.push({ role: 'user', content: 'What is your next step? Call a tool or set "done": true if finished.' });
-           continue;
-        }
-
-        if (call.tool === 'start_background_task') { // already in a task — don't recurse
-          work.push({ role: 'user', content: 'You are already working on the task. Use real tools or finish by setting "tool": null.' });
-          continue;
-        }
-        const tStep = Date.now();
-        const res = await runTool(call.tool, call.args);
-        console.log(`[Task]    step ${step + 1}: ${call.tool}(${JSON.stringify(call.args).slice(0, 80)}) ${Date.now() - tStep}ms → ${JSON.stringify(res).slice(0, 120)}`);
-        TaskRegistry.log(`${call.tool} → ${JSON.stringify(res).slice(0, 90)}`);
-        
+        // No tools, not done — just thinking out loud. Nudge toward the next concrete step.
         work.push({ role: 'assistant', content: reply });
-        work.push({ role: 'user', content:
-          `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 128000)}\n` +
-          `Keep going until the task is fully done AND verified, then finish by setting "done": true and putting your summary in "speak".` });
+        work.push({ role: 'user', content: 'What is your next step? Call a tool, or set "done": true (with your summary in "speak") if the task is finished and verified.' });
       }
       if (!result.trim()) {
         const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"thought": "...", "tool": null, "speak": "...", "done": true}.' }], taskSys);

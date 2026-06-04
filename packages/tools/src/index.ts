@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────
 
 // ── Public API (re-exported from registry) ───────────────────────
-export type { ToolSpec, ToolInvocation, TaskState } from './registry.js';
+export type { ToolSpec, ToolInvocation, ToolCall, TaskState } from './registry.js';
 export { registerTool, listTools, describeTools, parseToolCall, runTool, fetchJson, TaskRegistry } from './registry.js';
 
 // ── Side-effect imports: each file self-registers its tool(s) ────
