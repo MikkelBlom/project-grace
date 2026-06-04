@@ -10,6 +10,8 @@ export interface GraceEvents {
   'stt:heard': { text: string; confidence: number; sessionId: string };
   'stt:listening': { active: boolean };
   'stt:vad': { hasVoice: boolean };
+  'stt:pause': Record<string, never>;
+  'stt:resume': Record<string, never>;
 
   // ── LLM ───────────────────────────────────
   /** text = the user's raw utterance — passed through so LLM handlers can do contextual matching */

@@ -152,6 +152,17 @@ def load_models():
 
 # ── Audio capture + VAD + Whisper pipeline ─────────────────────────────────────
 
+def stdin_listener(state: dict):
+    for line in sys.stdin:
+        try:
+            msg = json.loads(line)
+            if msg.get("command") == "pause":
+                state["paused"] = True
+            elif msg.get("command") == "resume":
+                state["paused"] = False
+        except Exception:
+            pass
+
 def find_best_input_device(sd):
     """Find the best microphone device — prefer the Windows default, log all options."""
     # Virtual/shared devices that never have real audio — skip these
@@ -222,6 +233,9 @@ def run_pipeline(vad_model, get_speech_probs, whisper_model):
     silence_counter = 0
     was_speaking = False
 
+    state = {"paused": False}
+    threading.Thread(target=stdin_listener, args=(state,), daemon=True).start()
+
     def audio_callback(indata, frames, time_info, status):
         if status:
             print(f"[sounddevice] {status}", file=sys.stderr)
@@ -247,6 +261,15 @@ def run_pipeline(vad_model, get_speech_probs, whisper_model):
             try:
                 chunk = audio_queue.get(timeout=1.0)
             except queue.Empty:
+                continue
+
+            if state["paused"]:
+                if speech_buffer:
+                    speech_buffer.clear()
+                    silence_counter = 0
+                if was_speaking:
+                    emit_vad(False)
+                    was_speaking = False
                 continue
 
             # ── VAD ──────────────────────────────────────────────────────

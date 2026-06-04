@@ -107,8 +107,13 @@ export class GraceCore {
       }
     });
 
-    // ── TTS done ──────────────────────────────
+    // ── TTS state tracking ────────────────────
+    bus.on('tts:speaking', () => {
+      bus.emit('stt:pause', {});
+    });
+
     bus.on('tts:done', () => {
+      bus.emit('stt:resume', {});
       setTimeout(() => {
         this.isProcessing = false;
         bus.emit('overlay:show', { type: 'listening' });

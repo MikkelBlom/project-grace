@@ -37,6 +37,11 @@ export class WhisperSTT {
   private lineBuffer = '';
   private sessionCounter = 0;
 
+  constructor() {
+    bus.on('stt:pause', () => this.pause());
+    bus.on('stt:resume', () => this.resume());
+  }
+
   start(): void {
     if (this.running) return;
     this.running = true;
@@ -54,7 +59,7 @@ export class WhisperSTT {
       '--device', DEVICE,
       '--lang',   LANG,
     ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         PYTHONUTF8: '1',           // Force Python stdout/stderr to UTF-8
@@ -145,6 +150,20 @@ export class WhisperSTT {
     }
     bus.emit('stt:listening', { active: false });
     console.log('[WhisperSTT] Stopped.');
+  }
+
+  pause(): void {
+    if (this.process?.stdin && this.running) {
+      console.log('[WhisperSTT] Pausing microphone (TTS is speaking)');
+      this.process.stdin.write(JSON.stringify({ command: 'pause' }) + '\n');
+    }
+  }
+
+  resume(): void {
+    if (this.process?.stdin && this.running) {
+      console.log('[WhisperSTT] Resuming microphone (TTS finished)');
+      this.process.stdin.write(JSON.stringify({ command: 'resume' }) + '\n');
+    }
   }
 
   private handleMessage(msg: {
