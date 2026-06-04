@@ -343,6 +343,20 @@ export class OllamaLLM {
             break;
           }
 
+          // Mission is special: a long autonomous run. Fire it and return.
+          const mission = call.calls.find(c => c.tool === 'start_mission');
+          if (mission) {
+            if (MissionRegistry.isRunning() || TaskRegistry.isRunning()) {
+              work.push({ role: 'assistant', content: reply });
+              work.push({ role: 'user', content: 'Something is already running — do NOT start a mission now. Tell Mikkel what is running, or stop it first.' });
+              continue;
+            }
+            const obj = String((mission.args as Record<string, unknown>)?.objective || text);
+            void this.runMission(obj);
+            allSpoken.push(call.speak?.trim() || "Okay — jeg går i gang. Jeg lægger en plan først og bygger så løs; sig 'status', 'pause' eller 'stop' når som helst.");
+            break;
+          }
+
           // Background task is special: fire it and return (don't batch it with reads).
           const bg = call.calls.find(c => c.tool === 'start_background_task');
           if (bg) {
@@ -528,7 +542,7 @@ export class OllamaLLM {
       let result = '';
       let didRealWork = false;            // did any REAL tool (not status/delegation) actually run?
       let rejectedEmptyDone = false;
-      const META = new Set(['start_background_task', 'task_status', 'cancel_task']);  // meaningless inside a task
+      const META = new Set(['start_background_task', 'task_status', 'cancel_task', 'start_mission', 'mission_status']);  // meaningless inside a task
       const MAX = 24;   // deeper autonomous tasks are fine — local, no token cost
       let step = 0;
       for (; step < MAX; step++) {
@@ -644,6 +658,195 @@ export class OllamaLLM {
       TaskRegistry.fail(String(err));
       announce(`I hit a problem with that task: ${err}`);
     }
+  }
+
+  // ── Autonomous MISSION: plan a backlog, then build through it for hours ──
+  // The key difference from a background task: a task is ONE bounded job that ends at its
+  // step cap. A mission is an outer loop over a backlog where EACH item is its own bounded
+  // sub-task — so hitting a per-item cap never ends the mission; it just moves to the next
+  // item. This is what lets Grace build 20+ tools unattended. Pause/stop are honored between
+  // items and inside each item (via the same cancel/pause flags + abortable generation).
+  private async runMission(objective: string): Promise<void> {
+    const t0 = Date.now();
+    MissionRegistry.start(objective);
+    console.log(`[Mission] ▶ ${objective}`);
+    const announce = (text: string) => {
+      if (!text?.trim()) return;
+      const sid = `mission-${Date.now()}`;
+      bus.emit('llm:response', { text, sessionId: sid, model: this.model, spoken: true });
+      bus.emit('tts:speaking', { text, sessionId: sid });
+    };
+    try {
+      // ── PLAN: research (optional) + compile a concrete backlog ──
+      MissionRegistry.phase('planning the backlog');
+      announce('Okay — jeg undersøger og lægger en plan først.');
+      const backlog = await this.planBacklog(objective);
+      if (MissionRegistry.cancelRequested) { MissionRegistry.finish(); return; }
+      if (backlog.length === 0) {
+        MissionRegistry.finish();
+        announce('Jeg kunne ikke lægge en konkret plan — prøv at gøre målet lidt mere specifikt.');
+        return;
+      }
+      MissionRegistry.setBacklog(backlog);
+      console.log(`[Mission] 📋 backlog (${backlog.length}):\n - ${backlog.join('\n - ')}`);
+      announce(`Planen er klar: ${backlog.length} ting på listen. Jeg bygger dem én ad gangen nu — sig 'status', 'pause' eller 'stop' når som helst.`);
+
+      // ── EXECUTE: each backlog item is its own bounded sub-task ──
+      const MAX_ITEMS = 80;   // safety ceiling; the backlog length normally bounds this
+      for (let i = 0; i < MAX_ITEMS; i++) {
+        await this.waitWhilePaused(() => MissionRegistry.paused, () => MissionRegistry.cancelRequested);
+        if (MissionRegistry.cancelRequested) break;
+        const item = MissionRegistry.nextItem();
+        if (!item) break;   // backlog drained
+        MissionRegistry.phase(`building: ${item.slice(0, 60)}`);
+        console.log(`[Mission] 🔨 item ${i + 1}: ${item}`);
+        const res = await this.buildOneTool(item, objective);
+        if (MissionRegistry.cancelRequested) break;
+        if (res.outcome === 'built') MissionRegistry.completeCurrent(res.note);
+        else if (res.outcome === 'pending') MissionRegistry.pendingCurrent(res.note);
+        else MissionRegistry.failCurrent(res.note);
+        console.log(`[Mission]    ↳ ${res.outcome}: ${res.note}`);
+        announce(res.note);   // concise per-item progress
+      }
+
+      const m = MissionRegistry.current;
+      const built = m?.completed.length ?? 0;
+      const failed = m?.failed.length ?? 0;
+      const pending = m?.pending.length ?? 0;
+      const mins = Math.round((Date.now() - t0) / 60000);
+      const summary = MissionRegistry.cancelRequested
+        ? `Stoppet. Jeg nåede at bygge ${built} tools${pending ? `, ${pending} venter på dit ja` : ''} på ${mins} minutter.`
+        : `Mission færdig: ${built} tools bygget${pending ? `, ${pending} venter på din godkendelse` : ''}${failed ? `, ${failed} fejlede` : ''}, på ${mins} minutter.`;
+      console.log(`[Mission] ✓ ${summary}`);
+      MissionRegistry.finish();
+      bus.emit('overlay:notification', { text: '✅ Mission done', level: 'info', duration: 6000 });
+      announce(summary);
+    } catch (err) {
+      MissionRegistry.finish();
+      if (MissionRegistry.cancelRequested || this.turnCancelled || /abort/i.test(String(err))) {
+        console.log('[Mission] ⏹ aborted (barge-in)');
+        return;
+      }
+      console.error('[Mission] error:', err);
+      announce(`Jeg løb ind i et problem med missionen: ${err}`);
+    }
+  }
+
+  // Plan phase: a short agentic loop that may research (web_search/fetch_url), then emits a
+  // backlog as a JSON array. Returns one descriptive line per item ("name: purpose").
+  private async planBacklog(objective: string): Promise<string[]> {
+    const planSys = `${currentSystemPrompt()}\n\nMISSION PLANNING MODE: You are planning a long autonomous build mission. ` +
+      `You MAY research first with web_search / fetch_url if it helps. Then propose a backlog of CONCRETE, mostly pure-compute / read-only tools to build for yourself. ` +
+      `Each must be a distinct, buildable tool with a clear single purpose. AVOID duplicating tools you already have (listed above). ` +
+      `Prefer tools that need no files or network so they auto-promote. When ready, reply with JSON: ` +
+      `{"thought":"...","tool":null,"done":true,"backlog":[{"name":"snake_case_name","purpose":"one concise line"}, ...]}. ` +
+      `Aim for a generous list if the objective implies many (e.g. 20+).`;
+    const work: Array<{ role: string; content: string }> = [{ role: 'user',
+      content: `OBJECTIVE: ${objective}\n\nResearch if useful, then output the backlog JSON as instructed.` }];
+    const tryJson = (s: string): any => {
+      try { return JSON.parse(s); } catch { /* fallthrough */ }
+      const a = s.indexOf('{'), b = s.lastIndexOf('}');
+      if (a !== -1 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch { /* noop */ } }
+      return null;
+    };
+    for (let step = 0; step < 6; step++) {
+      await this.waitWhilePaused(() => MissionRegistry.paused, () => MissionRegistry.cancelRequested);
+      if (MissionRegistry.cancelRequested) return [];
+      const reply = await this.complete(work, planSys);
+      if (this.turnCancelled || MissionRegistry.cancelRequested) return [];
+      const raw = tryJson(reply);
+      if (raw && Array.isArray(raw.backlog) && raw.backlog.length) {
+        return raw.backlog
+          .map((b: any) => typeof b === 'string' ? b : (b && b.name ? `${b.name}: ${b.purpose ?? ''}`.trim() : ''))
+          .filter((s: string) => s)
+          .slice(0, 80);
+      }
+      const call = parseToolCall(reply);
+      if (call && call.calls.length) {
+        const runs = await Promise.all(call.calls.slice(0, 5).map(async (c) => {
+          console.log(`[Mission:plan] 🔧 ${c.tool}`, c.args);
+          return { tool: c.tool, res: await runTool(c.tool, c.args) };
+        }));
+        const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 8000)}`).join('\n');
+        work.push({ role: 'assistant', content: reply });
+        work.push({ role: 'user', content: `${combined}\nNow output the final backlog JSON with a "backlog" array as instructed.` });
+        continue;
+      }
+      // No backlog, no tool — nudge to produce the list.
+      work.push({ role: 'assistant', content: reply });
+      work.push({ role: 'user', content: 'Output the backlog now as JSON with a "backlog" array of {name, purpose}. No more research.' });
+    }
+    return [];
+  }
+
+  // Build ONE tool via create_tool, with a few sandbox-fix retries. Returns a structured
+  // outcome so the mission can tally built / pending-approval / failed without re-parsing prose.
+  private async buildOneTool(item: string, objective: string): Promise<{ outcome: 'built' | 'pending' | 'failed'; note: string }> {
+    const buildSys = `${currentSystemPrompt()}\n\nMISSION BUILD MODE: You are autonomously building ONE tool for yourself RIGHT NOW with create_tool.\n` +
+      `TOOL TO BUILD: ${item}\n` +
+      `Mission objective (context): ${objective}\n` +
+      `Rules:\n` +
+      `- FIRST check your existing tools (listed above). If one already covers this, do NOT duplicate — reply {"done":true,"speak":"already exists: <name>"}.\n` +
+      `- Otherwise write the FULL TypeScript source: import { registerTool } from '../registry.js'; then registerTool({ name, description, params, async run(args, ctx){...} }). To call another tool from inside, use await ctx.callTool('web_search', { query }).\n` +
+      `- Call create_tool with { name, source, smoke_args } (smoke_args = JSON to test-run it once).\n` +
+      `- Prefer PURE-COMPUTE / read-only logic so it auto-promotes. If create_tool returns needs_confirmation (a risky file/network tool), that is an ACCEPTABLE stopping point — reply {"done":true,"speak":"needs approval: <name>"}.\n` +
+      `- If the sandbox FAILS, read the error, FIX the source, and call create_tool again (a few tries).\n` +
+      `- Do NOT call start_background_task, task_status, start_mission, or mission_status here.\n` +
+      `- When create_tool succeeds (promoted) or needs approval, finish with done:true and a ONE-line speak.`;
+    const work: Array<{ role: string; content: string }> = [{ role: 'user',
+      content: `Build this tool now: ${item}. Check for duplicates first, then write the source and call create_tool.` }];
+    const MAX = 8;
+    let lastErr = '';
+    for (let step = 0; step < MAX; step++) {
+      await this.waitWhilePaused(() => MissionRegistry.paused, () => MissionRegistry.cancelRequested);
+      if (MissionRegistry.cancelRequested) return { outcome: 'failed', note: `stopped before finishing ${item}` };
+      const reply = await this.complete(work, buildSys);
+      if (this.turnCancelled || MissionRegistry.cancelRequested) return { outcome: 'failed', note: `stopped during ${item}` };
+      const call = parseToolCall(reply);
+      if (!call) {
+        work.push({ role: 'assistant', content: reply });
+        work.push({ role: 'user', content: 'Output valid JSON {"thought","tool","args","speak","done"}.' });
+        continue;
+      }
+
+      const createCall = call.calls.find(c => c.tool === 'create_tool');
+      if (createCall) {
+        const res: any = await runTool('create_tool', createCall.args);
+        console.log(`[Mission:build]    create_tool → ${JSON.stringify(res).slice(0, 200)}`);
+        if (res?.promoted) {
+          return { outcome: 'built', note: `✓ byggede ${res.tool}${res.live ? '' : ' (aktiv efter genstart)'}` };
+        }
+        if (res?.needs_confirmation) {
+          return { outcome: 'pending', note: `⏳ ${res.tool || item} klar, men venter på dit ja (rører filer/netværk)` };
+        }
+        // Sandbox failed — feed the error back for a fix.
+        lastErr = String(res?.error || 'unknown sandbox error').slice(0, 300);
+        work.push({ role: 'assistant', content: reply });
+        work.push({ role: 'user', content: `create_tool failed: ${lastErr}\nFix the TypeScript source based on this error and call create_tool again.` });
+        continue;
+      }
+
+      // Other tool calls (e.g. listing/inspecting) — run and feed back.
+      if (call.calls.length) {
+        const runs = await Promise.all(call.calls.slice(0, 5).map(async (c) => ({ tool: c.tool, res: await runTool(c.tool, c.args) })));
+        const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 6000)}`).join('\n');
+        work.push({ role: 'assistant', content: reply });
+        work.push({ role: 'user', content: `${combined}\nNow write the tool source and call create_tool (or reply done:true if it already exists).` });
+        continue;
+      }
+
+      // No tool call.
+      if (call.done) {
+        const note = (call.speak || '').toLowerCase();
+        if (/already exist|findes allerede|duplicate/.test(note)) return { outcome: 'built', note: `↺ ${item}: findes allerede` };
+        if (/need.*(approv|confirm)|venter på|godkend/.test(note)) return { outcome: 'pending', note: `⏳ ${item}: venter på dit ja` };
+        // Said done but never actually built — treat as failed (honest).
+        return { outcome: 'failed', note: `✗ ${item}: ikke bygget${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}` };
+      }
+      work.push({ role: 'assistant', content: reply });
+      work.push({ role: 'user', content: 'Write the tool source and call create_tool now, or reply done:true if it already exists.' });
+    }
+    return { outcome: 'failed', note: `✗ ${item}: løb tør for forsøg${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}` };
   }
 
   // ── Core chat method ─────────────────────────

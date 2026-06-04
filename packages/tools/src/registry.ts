@@ -170,6 +170,8 @@ export interface MissionState {
   backlog: string[];
   completed: string[];
   failed: string[];
+  /** Risky tools that passed the sandbox but need Mikkel's approval — not promoted, awaiting review. */
+  pending: string[];
   current?: string;
   phase: string;
   startedAt: number;
@@ -183,7 +185,7 @@ class MissionRegistryImpl {
     this.cancelRequested = false;
     this.paused = false;
     this.current = {
-      id: 'mission-' + Date.now(), objective, backlog: [...backlog], completed: [], failed: [],
+      id: 'mission-' + Date.now(), objective, backlog: [...backlog], completed: [], failed: [], pending: [],
       phase: 'planning', startedAt: Date.now(), done: false,
     };
     return this.current;
@@ -199,6 +201,7 @@ class MissionRegistryImpl {
   }
   completeCurrent(note?: string): void { if (this.current?.current) { this.current.completed.push(note || this.current.current); this.current.current = undefined; } }
   failCurrent(note?: string): void { if (this.current?.current) { this.current.failed.push(note || this.current.current); this.current.current = undefined; } }
+  pendingCurrent(note?: string): void { if (this.current?.current) { this.current.pending.push(note || this.current.current); this.current.current = undefined; } }
   phase(p: string): void { if (this.current && !this.current.done) this.current.phase = p; }
   finish(): void { if (this.current) { this.current.done = true; this.current.phase = 'done'; this.current.current = undefined; } }
   requestCancel(): boolean { if (this.current && !this.current.done) { this.cancelRequested = true; this.paused = false; return true; } return false; }
@@ -210,7 +213,7 @@ class MissionRegistryImpl {
     if (!m) return 'No mission is running.';
     const mins = Math.round((Date.now() - m.startedAt) / 60000);
     const head = `Mission "${m.objective.slice(0, 80)}" — ${m.done ? 'finished' : (this.paused ? 'paused' : m.phase)}, ~${mins} min in.`;
-    return `${head} Done ${m.completed.length}${m.failed.length ? `, failed ${m.failed.length}` : ''}, ${m.backlog.length} left in the backlog.${m.current ? ` Currently: ${m.current}.` : ''}`;
+    return `${head} Done ${m.completed.length}${m.failed.length ? `, failed ${m.failed.length}` : ''}${m.pending.length ? `, ${m.pending.length} awaiting your approval` : ''}, ${m.backlog.length} left in the backlog.${m.current ? ` Currently: ${m.current}.` : ''}`;
   }
 }
 export const MissionRegistry = new MissionRegistryImpl();
