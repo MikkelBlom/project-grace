@@ -13,6 +13,12 @@ import { bus } from './EventBus.js';
 import { GraceMemory } from './memory.js';
 import type { GraceConfig, GraceMode, GracePowerState, ConversationTurn } from '@grace/shared';
 
+// Hold-the-floor / "listen mode" trigger phrases (case-insensitive, DA + EN).
+// START → Grace goes silent and buffers everything you say until an END phrase, then
+// answers the whole thing at once. Lets you explain complex ideas with pauses.
+const LISTEN_START_RE = /(let me explain|let me think out loud|hold on,? let me|don'?t interrupt|don'?t respond yet|listen up|hear me out|lad mig forklare|lad mig tale ud|lad mig tænke højt|hør (her|efter)|lyt (nu|lige)|afbryd mig ikke|jeg (skal|vil) (lige )?forklare)/i;
+const LISTEN_END_RE = /(i'?m done|that'?s it|that'?s all|i'?m finished|over to you|your turn|go ahead now|jeg er færdig|det var det|det var alt|din tur|værsgo|så er jeg færdig|nu kan du svare|nu er det din tur|okay,? kør|kør nu)/i;
+
 export class GraceCore {
   private config: GraceConfig;
   private mode: GraceMode = 'normal';
@@ -20,6 +26,8 @@ export class GraceCore {
   private history: ConversationTurn[] = [];
   private isProcessing = false;
   private fieldNoteBuffer: string[] = [];
+  private listenMode = false;          // "hold the floor" — buffer speech until you say you're done
+  private listenBuffer: string[] = [];
   private memory = new GraceMemory();
   private sessionId = `sess-${Date.now()}`;
 
@@ -53,15 +61,42 @@ export class GraceCore {
         return;
       }
 
+      let utterance = text;
+
+      // ── Hold-the-floor / listen mode ──────────
+      const lower = utterance.trim().toLowerCase();
+      if (this.listenMode) {
+        if (LISTEN_END_RE.test(lower)) {
+          this.listenMode = false;
+          this.listenBuffer.push(utterance.trim());
+          utterance = this.listenBuffer.join(' ').replace(/\s+/g, ' ').trim();
+          this.listenBuffer = [];
+          console.log(`[Core] 🎧 listen mode OFF — processing ${utterance.length} chars`);
+          // fall through to normal dispatch with the combined text
+        } else {
+          this.listenBuffer.push(utterance.trim());
+          console.log(`[Core] 🎧 holding (${this.listenBuffer.length} parts): "${utterance.trim().slice(0, 60)}"`);
+          bus.emit('overlay:show', { type: 'listening' });
+          return; // stay silent, keep listening across the pause
+        }
+      } else if (LISTEN_START_RE.test(lower)) {
+        this.listenMode = true;
+        this.listenBuffer = [];
+        console.log('[Core] 🎧 listen mode ON — buffering until you say you are done');
+        bus.emit('overlay:show', { type: 'listening' });
+        bus.emit('tts:speaking', { text: "I'm listening — take your time, and tell me when you're done.", sessionId });
+        return;
+      }
+
       if (this.isProcessing) return;
       this.isProcessing = true;
 
       if (this.mode !== 'discreet') {
         this.history.push({
-          role: 'user', content: text,
+          role: 'user', content: utterance,
           timestamp: new Date(), sessionId, persist: true,
         });
-        this.memory.addTurn(this.sessionId, 'user', text);
+        this.memory.addTurn(this.sessionId, 'user', utterance);
       }
 
       // Build a compact history snapshot for the LLM (last 20 turns)
@@ -71,7 +106,7 @@ export class GraceCore {
       }));
 
       bus.emit('overlay:show', { type: 'thinking' });
-      bus.emit('llm:thinking', { sessionId, text, history: historySnapshot });
+      bus.emit('llm:thinking', { sessionId, text: utterance, history: historySnapshot });
     });
 
     // ── LLM response ──────────────────────────
