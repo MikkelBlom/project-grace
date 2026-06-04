@@ -48,20 +48,23 @@ KokoroTTS  --tts:done--> GraceCore (resets isProcessing, back to listening)
 
 ## The brain: `packages/llm/src/OllamaLLM.ts`
 Key pieces (don't bypass them):
-- `SYSTEM_PROMPT` = `loadPersonality()` (from `config/personality.json`) + `describeTools()`.
+- `SYSTEM_PROMPT` = `loadPersonality()` (from `config/personality.json`) + `describeEnvironment()`
+  (real home path, Windows username, Danish→English folder map — so she stops guessing paths) + `describeTools()`.
 - `complete(messages, systemPrompt?)` — one non-streaming chat call (`think:false`). Pass a custom
   system prompt for special modes.
 - **`llm:thinking` handler = the multi-step tool loop:**
   builds `work` (history + a `lastToolContext` note for navigation + the user turn), then loops up
-  to `MAX_STEPS`: `complete` → `parseToolCall` → if tool, run it and feed the result back; if prose,
-  that's the answer. Guards: rejects "let me find…" narration (forces the tool), handles `<SKIP>`,
-  intercepts `start_background_task`. Speaks the final answer as ONE clip.
+  to `MAX_STEPS`: `complete` → `parseToolCall` → run every requested tool (one `tool`, or several via
+  a `tools[]` array — independent calls run in parallel) and feed all results back; when she replies
+  with no tool, that's the answer. After a file-mutating tool she's told to verify before claiming
+  success. Handles `<SKIP>`, intercepts `start_background_task`. Speaks the answer as ONE clip.
+  (Reliability comes from the JSON schema + `format:'json'`, not the old narration-regex guards.)
 - **`runBackgroundTask(description)`** — autonomous: plan → execute (tool loop with verification,
   task-mode system prompt, no `<SKIP>`) → `TaskRegistry.finish` → announce via the bus.
 
 ## Tools: `packages/tools/src/`
 - `registry.ts` — `ToolSpec { name, description, params, run(args) }`, `registerTool`, `describeTools`
-  (injected into the system prompt), `parseToolCall` (extracts the first balanced JSON object from a reply),
+  (injected into the system prompt), `parseToolCall` (parses the reply JSON — single `tool` or a `tools[]` batch — into `calls[]`),
   `runTool(name, args)`, `fetchJson` helper, `TaskRegistry`. **See `docs/adding-tools.md`.**
 - `tools/*.ts` — one file per tool, each self-registers via `registerTool()` at import time.
 - `index.ts` — re-exports the public API from `registry.ts` and loads all tool files.

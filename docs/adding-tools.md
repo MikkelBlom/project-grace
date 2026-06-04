@@ -85,6 +85,9 @@ Small, focused: `Add your_tool tool` + the Co-Authored-By trailer used in `git l
 | `run_command` | cmd | stdout | **sandbox + allowlist only** — high risk; do last |
 | `calendar_*` | — | events | Google OAuth (heavier); or local .ics |
 
-Start with `take_screenshot`+`describe_screen`, `app_context`, then
-`create_reminder`. Add **multiple-tool-calls-per-turn** (ROADMAP P1) so
-compound requests work.
+Start with `take_screenshot`+`describe_screen`, `app_context`, then `create_reminder`.
+
+**Multiple tool calls per turn (DONE):** the model can emit
+`{ "tools": [ {"tool":"get_location","args":{}}, {"tool":"get_weather","args":{"city":"X"}} ] }`
+to run independent tools in one turn; `parseToolCall` normalizes it and the loop runs them in parallel.
+Batch only independent calls — dependent steps still go one turn at a time.
