@@ -205,14 +205,14 @@ export class OllamaLLM {
       MissionRegistry.requestCancel();
       // Defer the ack so it queues AFTER TTS.stop() (same synchronous control:stop event) flushes.
       setTimeout(() => bus.emit('tts:speaking', {
-        text: wasBusy ? 'Okay — jeg stopper og er klar igen.' : 'Okay.',
+        text: wasBusy ? "Okay — stopping that, I'm ready again." : 'Okay.',
         sessionId: `ctl-${Date.now()}`,
       }), 80);
     });
     bus.on('control:pause', () => {
       const ok = [TaskRegistry.requestPause(), MissionRegistry.requestPause()].some(Boolean);
       setTimeout(() => bus.emit('tts:speaking', {
-        text: ok ? 'Pauser — sig til når jeg skal fortsætte.' : 'Der kører ikke noget at pause lige nu.',
+        text: ok ? 'Pausing — tell me when to continue.' : "There's nothing running to pause right now.",
         sessionId: `ctl-${Date.now()}`,
       }), 80);
     });
@@ -220,7 +220,7 @@ export class OllamaLLM {
       const running = TaskRegistry.isRunning() || MissionRegistry.isRunning();
       TaskRegistry.resume();
       MissionRegistry.resume();
-      bus.emit('tts:speaking', { text: running ? 'Fortsætter.' : 'Der er ikke noget på pause.', sessionId: `ctl-${Date.now()}` });
+      bus.emit('tts:speaking', { text: running ? 'Resuming.' : "There's nothing paused.", sessionId: `ctl-${Date.now()}` });
     });
     bus.on('control:status', () => {
       const status = MissionRegistry.isRunning() ? MissionRegistry.status() : TaskRegistry.status();
@@ -376,7 +376,7 @@ export class OllamaLLM {
             const argObj = String((mission.args as Record<string, unknown>)?.objective || '');
             const obj = argObj.length > (text?.length ?? 0) ? argObj : (text || argObj);
             void this.runMission(obj);
-            allSpoken.push(call.speak?.trim() || "Okay — jeg går i gang. Jeg lægger en plan først og bygger så løs; sig 'status', 'pause' eller 'stop' når som helst.");
+            allSpoken.push(call.speak?.trim() || "Okay — I'm on it. I'll plan it out first, then start building; say 'status', 'pause' or 'stop' any time.");
             break;
           }
 
@@ -698,28 +698,28 @@ export class OllamaLLM {
       const lines = [
         `# Mission progress`,
         ``,
-        `**Mål:** ${m.objective}`,
+        `**Objective:** ${m.objective}`,
         ``,
-        `_Startet: ${new Date(m.startedAt).toLocaleString('da-DK')} · Opdateret: ${ts} · Status: ${m.done ? 'færdig' : m.phase}_`,
+        `_Started: ${new Date(m.startedAt).toLocaleString('da-DK')} · Updated: ${ts} · Status: ${m.done ? 'finished' : m.phase}_`,
         ``,
-        `## Opsummering`,
-        `- Bygget: **${m.completed.length}**`,
-        `- Venter på din godkendelse (rører filer/netværk): **${m.pending.length}**`,
-        `- Fejlede: **${m.failed.length}**`,
-        `- Tilbage i backlog: **${m.backlog.length}**`,
+        `## Summary`,
+        `- Built: **${m.completed.length}**`,
+        `- Awaiting your approval (touches files/network): **${m.pending.length}**`,
+        `- Failed: **${m.failed.length}**`,
+        `- Remaining in backlog: **${m.backlog.length}**`,
         ``,
-        `## Bygget ✅`,
-        ...(m.completed.length ? m.completed.map(s => `- ${s}`) : ['_(ingen endnu)_']),
+        `## Built ✅`,
+        ...(m.completed.length ? m.completed.map(s => `- ${s}`) : ['_(none yet)_']),
         ``,
-        `## Venter på dit ja ⏳`,
-        ...(m.pending.length ? m.pending.map(s => `- ${s}`) : ['_(ingen)_']),
+        `## Awaiting your go-ahead ⏳`,
+        ...(m.pending.length ? m.pending.map(s => `- ${s}`) : ['_(none)_']),
         ``,
-        `## Fejlede ✗`,
-        ...(m.failed.length ? m.failed.map(s => `- ${s}`) : ['_(ingen)_']),
+        `## Failed ✗`,
+        ...(m.failed.length ? m.failed.map(s => `- ${s}`) : ['_(none)_']),
         ``,
-        `## Resterende backlog`,
-        ...(m.current ? [`- ⏳ (i gang) ${m.current}`] : []),
-        ...(m.backlog.length ? m.backlog.map(s => `- [ ] ${s}`) : (m.current ? [] : ['_(tom)_'])),
+        `## Remaining backlog`,
+        ...(m.current ? [`- ⏳ (in progress) ${m.current}`] : []),
+        ...(m.backlog.length ? m.backlog.map(s => `- [ ] ${s}`) : (m.current ? [] : ['_(empty)_'])),
         ``,
       ];
       writeFileSync(this.missionProgressPath, lines.join('\n'), 'utf-8');
@@ -747,18 +747,18 @@ export class OllamaLLM {
     try {
       // ── PLAN: research (optional) + compile a concrete backlog ──
       MissionRegistry.phase('planning the backlog');
-      announce('Okay — jeg undersøger og lægger en plan først.');
+      announce('Okay — let me research and draft a plan first.');
       const backlog = await this.planBacklog(objective);
       if (MissionRegistry.cancelRequested) { MissionRegistry.finish(); return; }
       if (backlog.length === 0) {
         MissionRegistry.finish();
-        announce('Jeg kunne ikke lægge en konkret plan — prøv at gøre målet lidt mere specifikt.');
+        announce("I couldn't put together a concrete plan — try making the objective a bit more specific.");
         return;
       }
       MissionRegistry.setBacklog(backlog);
       this.writeMissionProgress();
       console.log(`[Mission] 📋 backlog (${backlog.length}):\n - ${backlog.join('\n - ')}`);
-      announce(`Planen er klar: ${backlog.length} ting på listen, og jeg har skrevet den i progress-filen. Jeg bygger dem én ad gangen nu — sig 'status', 'pause' eller 'stop' når som helst.`);
+      announce(`Plan's ready: ${backlog.length} items on the list, and I've written it to the progress file. I'll build them one at a time now — say 'status', 'pause' or 'stop' any time.`);
 
       // ── EXECUTE: each backlog item is its own bounded sub-task ──
       const MAX_ITEMS = 80;   // safety ceiling; the backlog length normally bounds this
@@ -797,14 +797,14 @@ export class OllamaLLM {
       const pending = m?.pending.length ?? 0;
       const mins = Math.round((Date.now() - t0) / 60000);
       const summary = MissionRegistry.cancelRequested
-        ? `Stoppet. Jeg nåede at bygge ${built} tools${pending ? `, ${pending} venter på dit ja` : ''} på ${mins} minutter.`
-        : `Mission færdig: ${built} tools bygget${pending ? `, ${pending} venter på din godkendelse` : ''}${failed ? `, ${failed} fejlede` : ''}, på ${mins} minutter.`;
+        ? `Stopped. I built ${built} tool${built === 1 ? '' : 's'}${pending ? `, ${pending} waiting for your go-ahead` : ''} in ${mins} minutes.`
+        : `Mission done: ${built} tool${built === 1 ? '' : 's'} built${pending ? `, ${pending} waiting for your approval` : ''}${failed ? `, ${failed} failed` : ''}, in ${mins} minutes.`;
       console.log(`[Mission] ✓ ${summary}`);
       MissionRegistry.finish();
       this.writeMissionProgress();
       if (this.missionProgressPath) console.log(`[Mission] 📄 progress saved: ${this.missionProgressPath}`);
       bus.emit('overlay:notification', { text: '✅ Mission done', level: 'info', duration: 6000 });
-      announce(`${summary} Det hele står i progress-filen.`);
+      announce(`${summary} It's all in the progress file.`);
     } catch (err) {
       MissionRegistry.finish();
       if (MissionRegistry.cancelRequested || this.turnCancelled || /abort/i.test(String(err))) {
@@ -812,7 +812,7 @@ export class OllamaLLM {
         return;
       }
       console.error('[Mission] error:', err);
-      announce(`Jeg løb ind i et problem med missionen: ${err}`);
+      announce(`I ran into a problem with the mission: ${err}`);
     }
   }
 
@@ -899,10 +899,10 @@ export class OllamaLLM {
         const res: any = await runTool('create_tool', createCall.args);
         console.log(`[Mission:build]    create_tool → ${JSON.stringify(res).slice(0, 200)}`);
         if (res?.promoted) {
-          return { outcome: 'built', note: `✓ byggede ${res.tool}${res.live ? '' : ' (aktiv efter genstart)'}` };
+          return { outcome: 'built', note: `✓ built ${res.tool}${res.live ? '' : ' (active after restart)'}` };
         }
         if (res?.needs_confirmation) {
-          return { outcome: 'pending', note: `⏳ ${res.tool || item} klar, men venter på dit ja (rører filer/netværk)` };
+          return { outcome: 'pending', note: `⏳ ${res.tool || item} is ready but waiting for your go-ahead (touches files/network)` };
         }
         // Sandbox failed — feed the error back for a fix.
         lastErr = String(res?.error || 'unknown sandbox error').slice(0, 300);
@@ -923,15 +923,15 @@ export class OllamaLLM {
       // No tool call.
       if (call.done) {
         const note = (call.speak || '').toLowerCase();
-        if (/already exist|findes allerede|duplicate/.test(note)) return { outcome: 'built', note: `↺ ${item}: findes allerede` };
-        if (/need.*(approv|confirm)|venter på|godkend/.test(note)) return { outcome: 'pending', note: `⏳ ${item}: venter på dit ja` };
+        if (/already exist|findes allerede|duplicate/.test(note)) return { outcome: 'built', note: `↺ ${item}: already exists` };
+        if (/need.*(approv|confirm)|venter på|godkend/.test(note)) return { outcome: 'pending', note: `⏳ ${item}: waiting for your go-ahead` };
         // Said done but never actually built — treat as failed (honest).
-        return { outcome: 'failed', note: `✗ ${item}: ikke bygget${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}` };
+        return { outcome: 'failed', note: `✗ ${item}: not built${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}` };
       }
       work.push({ role: 'assistant', content: reply });
       work.push({ role: 'user', content: 'Write the tool source and call create_tool now, or reply done:true if it already exists.' });
     }
-    return { outcome: 'failed', note: `✗ ${item}: løb tør for forsøg${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}` };
+    return { outcome: 'failed', note: `✗ ${item}: ran out of attempts${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}` };
   }
 
   // ── Core chat method ─────────────────────────

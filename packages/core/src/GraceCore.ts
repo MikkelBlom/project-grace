@@ -310,7 +310,7 @@ export class GraceCore {
     this.listenBuffer = [];
     console.log('[Core] 🎧 listen mode ON — buffering until you say you are done');
     bus.emit('overlay:show', { type: 'listening' });
-    bus.emit('tts:speaking', { text: 'Jeg lytter — tag dig god tid, og sig til når du er klar.', sessionId });
+    bus.emit('tts:speaking', { text: "I'm listening — take your time, and tell me when you're ready.", sessionId });
   }
 
   /**
