@@ -354,7 +354,7 @@ export class OllamaLLM {
         stream: false,
         think: false,
         format: 'json',
-        options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 1024 },
+        options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 4096 },
       }),
       signal: AbortSignal.timeout(180_000),
     });
