@@ -6,6 +6,22 @@ Prioritized with root cause + fix direction. Evidence = the 13:29–14:06 sessio
 > Update: the 3 self-authored tools are kept and committed — `roll_dice` (now supports `sides`),
 > `get_current_time`, and `news_fetcher` (**fixed** to use `ctx.callTool`).
 
+## Round 4 — 2026-06-04 (speed shelved, listen mode added)
+
+- **Task speed FIXED enough**: batching cut the 18-file task from 5.6 min → ~50s, 50 files → ~94s.
+  Mikkel shelved further speed work. **Secondary-brain (concurrent small model) ruled out**: measured
+  26b@128K = 22 GB; e4b (11 GB) and e2b (8 GB) both EVICT 26b — no Gemma 4 model co-resides on 24 GB.
+- **NEW: listen mode ("hold the floor")** — `GraceCore` buffers speech between a START phrase
+  ("let me explain" / "lad mig forklare" / "hør her") and an END phrase ("det var det" / "I'm done" /
+  "din tur"), so Mikkel can explain complex things across pauses without Grace replying.
+- **Open — batch JSON corruption**: at ~50 calls in one reply, 26b emits malformed JSON — garbled tool
+  names (`$\write_file`, `・・write_file`, `write_string`, `else_logic`), stray `pattern`/`lag` keys,
+  broken paths (`C:\Users\mikke\:\Users...`, dropped `toolsplit`). Result: a few files end up empty or
+  misplaced (the "missed file"). Fix ideas: cap batch size (~10–15/reply) in taskSys; or a dedicated
+  `write_files`/`create_files` bulk tool that takes an array, so the model emits ONE small call not 50.
+- **Open — cancel timing**: "sæt på pause" often arrives after the (now-fast) task already finished, so
+  cancel_task reports "no task running". Works, just races short tasks.
+
 ## Round 3 — live test 2026-06-04 PM
 
 **Confirmed working live** ✅: P0 task loop actually did the work (created 18 files, verified, no
