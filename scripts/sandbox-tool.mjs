@@ -54,6 +54,7 @@ const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
 const m = out.match(/VERDICT (\{.*\})/);
 const verdict = m ? JSON.parse(m[1]) : { ok: false, error: 'no verdict from sandbox; raw output:\n' + out.slice(-1500) };
 console.log('[sandbox] verdict:\n' + JSON.stringify(verdict, null, 2));
+console.log('SANDBOX_RESULT ' + JSON.stringify(verdict));  // machine-readable line for create_tool
 
 if (verdict.ok && flag('--promote')) {
   console.log('[sandbox] ✓ passed in sandbox → promoting to the real tree…');

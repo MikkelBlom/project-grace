@@ -18,6 +18,7 @@ import './tools/get_weather.js';
 import './tools/search_files.js';
 import './tools/web_search.js';
 import './tools/read_file.js';
+import './tools/create_tool.js';
 import './tools/fetch_url.js';
 import './tools/write_file.js';
 import './tools/edit_file.js';

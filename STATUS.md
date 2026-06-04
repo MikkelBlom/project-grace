@@ -48,7 +48,8 @@ _Updated: 2026-06-04 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 ## Next (see ROADMAP.md)
 1. **Live-test + merge** `feat/reliability-and-batch-tools` (voice session: real paths, batched
    calls, verify-before-done, STT-confirm), then land it on main.
-2. **`create_tool`** Grace tool — thin wrapper over `sandbox-tool.mjs --promote` (sandbox is built);
-   decide the promote policy (auto-promote trivial tools vs review-gate file/network ones). docs/auto-develop.md.
+2. **`create_tool` ✅ built** — Grace authors a tool → sandbox validates → pure-compute auto-promotes,
+   file/network tools gate for confirmation (`confirm:true`). Verified headless. Next: hot-load without
+   restart (today a new tool is live after the next app start); `auto_git_commit` after a tool goes green.
 3. take_screenshot + describe_screen (LLaVA vision); filesystem navigation index.
 4. better-sqlite3 (P4); scheduler (P2); GitHub remote + push (off-machine backup).

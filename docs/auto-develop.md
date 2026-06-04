@@ -51,8 +51,9 @@ the host **untouched** (verified — nothing lands on `C:\Users\mikke`).
 
 ## What's left
 
-- **`create_tool` Grace tool** — a thin wrapper over `sandbox-tool.mjs` so Grace can drive
-  PROPOSE→VALIDATE→FIX→PROMOTE from a background task. The safe execution layer it needs now exists.
+- ✅ **`create_tool` Grace tool** — BUILT (`packages/tools/src/tools/create_tool.ts`). Wraps
+  `sandbox-tool.mjs`: Grace gives a name + source → sandbox validates → pure-compute tools auto-promote,
+  file/network tools gate on `confirm:true`. Verified: risky tool → needs_confirmation; pure tool → promoted.
 - **Hot-load without restart** — today a new tool is live after the next app start (explicit imports,
   NodeNext; see HANDOFF "Dynamic Loader vs Explicit Imports"). Good enough to start; hot-load later.
 - **`auto_git_commit`** — commit the new tool file + import after it goes green.
