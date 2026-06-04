@@ -128,7 +128,13 @@ function describeEnvironment(): string {
     'FILE WORK — how to touch files safely:',
     '- Locate with search_files, read with read_file, then change with edit_file (surgical replace).',
     '- write_file is ONLY for creating a new file or fully replacing a small one. Its "overwrite" mode DELETES everything not in "content" — never overwrite a file you only read part of (read_file sets "truncated": true when your view is partial).',
-    '- After ANY write/edit/move/delete, VERIFY: re-read the file (read_file) or list the folder (list_dir) and confirm the change is complete (e.g. totalLines is what you expect) BEFORE telling Mikkel it is done.',
+    '- write_files (plural) is for creating MULTIPLE files at once — pass an array of {path, content}. Much faster and safer than many separate write_file calls.',
+    '- After ANY write/edit/move/delete, VERIFY: call list_dir on the target folder(s), check the TOTAL count of items and that NO file has bytes: 0. Report the ACTUAL count you verified. Do NOT say "all look good" unless you checked every item.',
+    '',
+    'IMPORTANT DISTINCTION:',
+    '- "read_file" reads a file\'s contents into YOUR context — Mikkel does NOT see anything on screen.',
+    '- "open_path" actually OPENS a file in the default app so Mikkel can see/interact with it.',
+    '- Never say "I\'ve opened it" when you only used read_file — say "I\'ve read the contents" instead.',
   ].join('\n');
 }
 
@@ -154,6 +160,8 @@ export class OllamaLLM {
   private isAvailable = false;
   /** Compact memory of the most recent tool result, injected next turn for folder navigation. */
   private lastToolContext = '';
+  /** Resolved absolute paths extracted from the last tool result — prevents STT-based path hallucination. */
+  private lastResolvedPaths: string[] = [];
 
   constructor(model = MODEL, baseUrl = OLLAMA_URL) {
     this.model = model;
@@ -246,6 +254,9 @@ export class OllamaLLM {
           ...(this.lastToolContext ? [{
             role: 'user',
             content: `CONTEXT — your most recent tool result was:\n${this.lastToolContext}\n` +
+              (this.lastResolvedPaths.length
+                ? `Resolved paths from your last action: ${this.lastResolvedPaths.join(', ')}. Reuse these EXACT paths — do NOT re-derive filenames from speech input.\n`
+                : '') +
               `When Mikkel refers to "that folder", "go deeper", or "the one you mentioned", reuse the FULL absolute path from this result as the search 'root'.`,
           }] : []),
           { role: 'user', content: text },
@@ -255,7 +266,8 @@ export class OllamaLLM {
         let lastToolNote = '';
         let narrationNudged = false;
 
-        for (let step = 0; step < MAX_STEPS; step++) {
+        let step = 0;
+        for (; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
           console.log(`[OllamaLLM] 🧠 Raw reply:\n${reply}`);
           const call = parseToolCall(reply);
@@ -296,8 +308,17 @@ export class OllamaLLM {
             break;
           }
 
+          // Cap batches to 10 — longer generations block the conversation (can't barge-in/pause).
+          let activeCalls = call.calls;
+          let deferredCount = 0;
+          if (activeCalls.length > 10) {
+            deferredCount = activeCalls.length - 10;
+            console.warn(`[OllamaLLM] ⚠️ Capping batch from ${activeCalls.length} to 10 (deferring ${deferredCount})`);
+            activeCalls = activeCalls.slice(0, 10);
+          }
+
           // Run all requested tools (independent → parallel), feed every result back.
-          const runs = await Promise.all(call.calls.map(async (c) => {
+          const runs = await Promise.all(activeCalls.map(async (c) => {
             const callId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             console.log(`[OllamaLLM] 🔧 step ${step + 1}: ${c.tool}`, c.args);
             bus.emit('overlay:notification', { text: `🔧 ${c.tool}`, level: 'info', duration: 2000 });
@@ -312,16 +333,29 @@ export class OllamaLLM {
           const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.result).slice(0, 128000)}`).join('\n');
           lastToolNote = runs.map(r => `${r.tool}(${JSON.stringify(r.args)}) → ${JSON.stringify(r.result).slice(0, 128000)}`).join('\n');
           const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
-            ? 'You changed a file — VERIFY it now with read_file/list_dir (check totalLines) before claiming success. ' : '';
+            ? 'You changed files — VERIFY by calling list_dir on the target folder(s). Check the TOTAL count and that NO file has bytes: 0. Report the ACTUAL count you verified, not just "all look good." ' : '';
+          const deferMsg = deferredCount > 0
+            ? `You sent ${deferredCount + runs.length} calls but I ran only the first ${runs.length}. Continue with the remaining ${deferredCount} in your next reply. ` : '';
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content:
             `${combined}\n` +
+            `${deferMsg}` +
             `If a result is empty or an error, retry with a corrected query or a different tool — don't give up after one attempt. ` +
             `To go deeper into a folder, reuse the full absolute path from a match above as the next 'root'. ` +
             `${verify}` +
             `When you have what you need, reply with {"thought":"...","tool":null,"speak":"your answer"}.` });
         }
-        if (lastToolNote) this.lastToolContext = lastToolNote;
+        if (lastToolNote) {
+          this.lastToolContext = lastToolNote;
+          // Extract resolved absolute paths so the model reuses exact paths, not STT re-derivations.
+          const pathMatches = lastToolNote.match(/(?:[A-Z]:\\[^\s"',}\]]+|(?:\/[^\s"',}\]]+){2,})/g) || [];
+          this.lastResolvedPaths = [...new Set(pathMatches)];
+        }
+
+        // Fix 5: If we exhausted MAX_STEPS without a final answer, be honest.
+        if (step >= MAX_STEPS && allSpoken.length === 0) {
+          allSpoken.push("I ran out of steps before I could finish — let me know if you want me to continue.");
+        }
 
         let finalText = allSpoken.join(' ').trim();
         if (!finalText) {
@@ -399,9 +433,11 @@ export class OllamaLLM {
     const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are executing this task RIGHT NOW, yourself, one tool call at a time. ` +
       `You are NOT delegating and nothing runs in the background — YOU do every step. ` +
       `Do NOT call start_background_task or task_status; they do nothing here. ` +
-      `Use real tools: write_file (it creates parent folders automatically), create_folder, list_dir, read_file, edit_file, move_file. ` +
-      `When you must do the SAME kind of step many times (e.g. create 15 files), batch several into ONE reply via the "tools" array — far faster than one per turn. ` +
-      `After a change, verify it with read_file/list_dir. ` +
+      `Use real tools: write_file, write_files (bulk — preferred for multiple files), create_folder, list_dir, read_file, edit_file, move_file. ` +
+      `When creating multiple files, use write_files (array of {path, content}) — far faster and safer than many separate write_file calls. ` +
+      `Batch up to 10 tool calls per reply via the "tools" array — NEVER more than 10, because long generations block the conversation. ` +
+      `Follow the user's instructions EXACTLY — if they say "create a subfolder, then create files in it," you MUST create the subfolder FIRST. Never skip or reorder explicit steps. ` +
+      `After a change, VERIFY by calling list_dir on the target folder(s). Check the TOTAL count and that NO file has bytes: 0. Report the ACTUAL count you verified. ` +
       `Only when the work is truly done AND verified, reply with "done": true and a concise summary in "speak".`;
     try {
       TaskRegistry.update('planning');
@@ -420,7 +456,8 @@ export class OllamaLLM {
       let rejectedEmptyDone = false;
       const META = new Set(['start_background_task', 'task_status', 'cancel_task']);  // meaningless inside a task
       const MAX = 24;   // deeper autonomous tasks are fine — local, no token cost
-      for (let step = 0; step < MAX; step++) {
+      let step = 0;
+      for (; step < MAX; step++) {
         if (TaskRegistry.cancelRequested) {
           console.warn('[Task] ⏹ cancelled by Mikkel');
           TaskRegistry.fail('cancelled by Mikkel');
@@ -439,8 +476,16 @@ export class OllamaLLM {
           continue;
         }
 
-        const realCalls = call.calls.filter(c => !META.has(c.tool));
+        let realCalls = call.calls.filter(c => !META.has(c.tool));
         const triedMeta = call.calls.some(c => META.has(c.tool));
+
+        // Cap batches to 10 — longer generations block the conversation (can't barge-in/pause).
+        let taskDeferredCount = 0;
+        if (realCalls.length > 10) {
+          taskDeferredCount = realCalls.length - 10;
+          console.warn(`[Task] ⚠️ Capping batch from ${realCalls.length} to 10 (deferring ${taskDeferredCount})`);
+          realCalls = realCalls.slice(0, 10);
+        }
 
         // Run any REAL tools first, so "done" can never skip unrun work.
         if (realCalls.length > 0) {
@@ -454,11 +499,13 @@ export class OllamaLLM {
           }));
           const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 128000)}`).join('\n');
           const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
-            ? 'You changed something — now VERIFY with read_file/list_dir before finishing. ' : '';
+            ? 'You changed files — VERIFY by calling list_dir on the target folder(s). Check the TOTAL count and that NO file has bytes: 0. Report the ACTUAL count you verified. ' : '';
+          const taskDeferMsg = taskDeferredCount > 0
+            ? `You sent ${taskDeferredCount + runs.length} calls but I ran only the first ${runs.length}. Continue with the remaining ${taskDeferredCount} in your next reply. ` : '';
           // Compact record (don't echo big file contents back into context — it bloats + slows later steps).
           work.push({ role: 'assistant', content: JSON.stringify({ thought: (call.thought || '').slice(0, 300), did: realCalls.map(c => c.tool), done: call.done }) });
           work.push({ role: 'user', content:
-            `${combined}\n${verify}` +
+            `${combined}\n${taskDeferMsg}${verify}` +
             `Continue with the next concrete step, or set "done": true (summary in "speak") once everything is actually done and verified.` });
           continue;
         }
@@ -500,6 +547,10 @@ export class OllamaLLM {
         TaskRegistry.fail(result);
         announce(result);
         return;
+      }
+      // Fix 5: If we exhausted MAX steps with real work but never got a done/result, be honest.
+      if (!result.trim() && step >= MAX) {
+        result = `I completed ${step} steps but ran out of room before finishing everything. Want me to continue?`;
       }
       if (!result.trim()) {
         const fb = await this.complete([...work, { role: 'user', content: 'Summarise honestly what you ACTUALLY did (only what really happened). Output JSON with {"thought":"...","tool":null,"speak":"...","done":true}.' }], taskSys);

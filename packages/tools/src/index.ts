@@ -22,6 +22,7 @@ import './tools/create_tool.js';
 import './tools/create_folder.js';
 import './tools/fetch_url.js';
 import './tools/write_file.js';
+import './tools/write_files.js';
 import './tools/edit_file.js';
 import './tools/move_file.js';
 import './tools/delete_file.js';

@@ -27,10 +27,14 @@ registerTool({
     }
     try {
       const entries = await fs.readdir(p, { withFileTypes: true });
-      return {
-        path: p,
-        items: entries.slice(0, 100).map(e => ({ name: e.name, type: e.isDirectory() ? 'folder' : 'file' })),
-      };
+      const items = await Promise.all(entries.slice(0, 100).map(async e => {
+        const item: Record<string, unknown> = { name: e.name, type: e.isDirectory() ? 'folder' : 'file' };
+        if (!e.isDirectory()) {
+          try { item.bytes = (await fs.stat(path.join(p, e.name))).size; } catch { /* skip */ }
+        }
+        return item;
+      }));
+      return { path: p, items };
     } catch (e) {
       return { path: p, error: String(e) };
     }
