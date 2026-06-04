@@ -26,14 +26,25 @@ _Updated: 2026-06-04 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 - Single-clip TTS; **playWav timeout 60s→600s** (long replies were SIGTERM-killed at 60s).
 - Cross-session memory (JSON; node:sqlite absent in Electron), git history (12+ commits).
 
+## In review — `feat/reliability-and-batch-tools` (built + headless-tested; needs Mikkel's live voice test)
+- **Multiple tool calls per turn:** model can emit `"tools":[{tool,args},...]`; both loops run them
+  in parallel and feed all results back (e.g. `location AND weather` in one turn).
+- **Environment awareness:** real home path + Windows username + Danish→English folder map injected
+  into the system prompt → no more `C:\Users\mikkel` ENOENT.
+- **Verify-before-done:** after any write/edit/move/delete the loops require a re-read/list check;
+  the task loop runs tools BEFORE honoring `done:true` so a final action can't be skipped.
+- **Prompt clarity:** `edit_file` (not read+overwrite) for partial changes; confirm odd STT before
+  heavy actions; per-step instruction sprawl trimmed. `personality.json` v3.
+- **Auto-develop foundation:** `scripts/scaffold-tool.mjs` adds/validates/reverts a tool safely
+  (build + smoke + auto-revert; surfaces the real tsc error). See `docs/auto-develop.md`.
+
 ## Optional / opt-in
 - `GRACE_TTS_PLAYBACK="server"` — persistent stereo audio player (smoother over BT); off by default.
 
 ## Next (see ROADMAP.md)
-1. **Tool-use reliability** (the live-session pain, do first): inject real home path + username into
-   the prompt (kills `C:\Users\mikkel` ENOENT); self-verify before `done:true` (re-check line counts
-   after writes); steer edits to `edit_file` over read+overwrite; confirm odd STT before heavy actions.
-2. **Multiple tool calls per turn** (P1) — cuts latency + re-planning; biggest UX lever.
+1. **Live-test + merge** `feat/reliability-and-batch-tools` (voice session: real paths, batched
+   calls, verify-before-done, STT-confirm), then land it on main.
+2. **`create_tool`** Grace tool on top of `scaffold-tool.mjs` + the execution-safety decision
+   (review-mode in-process first, then Docker sandbox for unattended self-expansion) — see docs/auto-develop.md.
 3. take_screenshot + describe_screen (LLaVA vision); filesystem navigation index.
-4. **Auto-develop** (P5): Grace writes → tests in a sandbox → plugs in a tool (one-file-per-tool now
-   makes this conflict-free). 5. better-sqlite3 (P4); scheduler (P2); GitHub remote + push.
+4. better-sqlite3 (P4); scheduler (P2); GitHub remote + push (off-machine backup).
