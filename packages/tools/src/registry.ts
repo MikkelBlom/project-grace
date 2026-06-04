@@ -32,42 +32,51 @@ export function describeTools(): string {
   }
   lines.push(
     '',
-    'To use a tool, output ONLY this single line of JSON, with NOTHING before or after it:',
-    '{"tool":"name","args":{...}}',
-    'For anything needing live or local data — weather, your location, files on this PC — you MUST call the matching tool; never guess or refuse. After you receive the result, answer Mikkel briefly in English. For things you already know, just answer normally.',
+    'You MUST ALWAYS output your response as a SINGLE JSON object in the exact following format:',
+    '{',
+    '  "speak": "Text you want to say to Mikkel (leave empty to work silently)",',
+    '  "tool": "name of the tool to call, or null if no tool is needed",',
+    '  "args": { "param": "value" }',
+    '}',
+    'For anything needing live or local data (files, paths, operations), you MUST set "tool" and "args". NEVER guess or refuse. You can set both "speak" and "tool" in the same response to explain what you are doing while doing it.',
   );
   return lines.join('\n');
 }
 
-export interface ToolInvocation { tool: string; args: Record<string, any>; }
+export interface ToolInvocation { tool: string; args: Record<string, any>; speak: string; }
 
-/** Detect a tool-call JSON in the model's reply. Returns null for normal prose. */
 export function parseToolCall(text: string): ToolInvocation | null {
+  const parse = (s: string): ToolInvocation | null => {
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === 'object') {
+        return {
+          tool: typeof obj.tool === 'string' ? obj.tool : '',
+          args: typeof obj.args === 'object' && obj.args !== null ? obj.args : {},
+          speak: typeof obj.speak === 'string' ? obj.speak : ''
+        };
+      }
+    } catch {}
+    return null;
+  };
+
   let s = text.trim();
+  let res = parse(s);
+  if (res) return res;
+
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence && fence[1]) s = fence[1].trim();
-  const start = s.indexOf('{');
-  if (start === -1) return null;
-  // Extract the first balanced {...} object, tolerating prose before/after it
-  // (the model sometimes appends "I'll search..." after the JSON).
-  let depth = 0, end = -1, inStr = false, esc = false;
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === '\\') esc = true;
-      else if (ch === '"') inStr = false;
-    } else if (ch === '"') inStr = true;
-    else if (ch === '{') depth++;
-    else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+  if (fence && fence[1]) {
+    res = parse(fence[1].trim());
+    if (res) return res;
   }
-  if (end === -1) return null;
-  try {
-    const obj = JSON.parse(s.slice(start, end + 1));
-    if (obj && typeof obj.tool === 'string') {
-      return { tool: obj.tool, args: (obj.args && typeof obj.args === 'object') ? obj.args : {} };
-    }
-  } catch { /* not a tool call — normal reply */ }
+
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    res = parse(s.slice(start, end + 1));
+    if (res) return res;
+  }
+
   return null;
 }
 

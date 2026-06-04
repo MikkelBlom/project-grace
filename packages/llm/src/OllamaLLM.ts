@@ -217,37 +217,32 @@ export class OllamaLLM {
           { role: 'user', content: text },
         ];
         const MAX_STEPS = 5;
-        let finalText: string | null = null;
+        let allSpoken: string[] = [];
         let lastToolNote = '';
-        let toolExecutedInLastStep = false;
 
         for (let step = 0; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
           const call = parseToolCall(reply);
+          
           if (!call) {
-            // Refuse a "promise to act" (or an empty reply) as the final answer —
-            // push her to emit the tool call instead of narrating intent.
-            const narrating = /\b(let me|i'?ll|i will|let'?s|i'?m going to|lad mig|jeg vil|jeg skal)\b[\s\S]{0,40}\b(search|find|look|check|see|fetch|tjek|kig|søg|lede|tjekke|restore|perform|fix|write|delete|open|move|update|create|rename|copy|save|add|remove|format|reformat|change|modify|place|relocate|overwrite|flet|slet|opret|skriv|flyt|gem|opdater|ret|ændr|tilføj|omdøb|rediger|go|start|clean|strip|do|make|run|execute|process|handle|take care|køre|starte|gøre|fikse|klare|ordne)\b/i.test(reply);
-            // Also catch past-tense false claims: the LLM says "I've moved/updated/written"
-            // without actually calling a tool — words alone don't change files.
-            const falseClaim = !toolExecutedInLastStep && /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
-            
-            toolExecutedInLastStep = false;
-
-            if (reply.trim() && !narrating && !falseClaim) { finalText = reply; break; }
-            work.push({ role: 'user', content: narrating
-              ? 'Do NOT narrate what you are about to do. Output the tool call JSON RIGHT NOW to actually do it.'
-              : falseClaim
-              ? 'You CLAIMED you already did something (moved/wrote/updated a file) but you did NOT call any tool — I see no tool JSON in your reply. Words alone do not change files. Output the tool-call JSON right now to ACTUALLY do it.'
-              : 'You replied with nothing. Either output a tool call (one line of JSON), or give Mikkel a plain-English answer now.' });
+            work.push({ role: 'assistant', content: reply });
+            work.push({ role: 'user', content: 'You MUST output valid JSON matching the required {"speak": "...", "tool": "...", "args": {...}} schema. Do not output plain text.' });
             continue;
           }
 
-          // Autonomous background task: acknowledge now, then work on it on our own.
+          if (call.speak && call.speak.trim()) {
+            allSpoken.push(call.speak.trim());
+          }
+
+          if (!call.tool || call.tool === 'null' || call.tool === 'reply') {
+            // She doesn't want to call a tool, she just wants to speak. Turn is done.
+            break;
+          }
+
           if (call.tool === 'start_background_task') {
             const desc = String((call.args && (call.args as Record<string, unknown>).description) || text);
             void this.runBackgroundTask(desc);
-            finalText = "On it — I'll dig into that on my own and let you know when I'm done.";
+            if (!call.speak) allSpoken.push("On it — I'll dig into that on my own and let you know when I'm done.");
             break;
           }
 
@@ -260,8 +255,6 @@ export class OllamaLLM {
           bus.emit('tool:result', { callId, result, duration_ms: Date.now() - started });
           console.log(`[OllamaLLM]    ↳ ${Date.now() - started}ms · ${JSON.stringify(result).slice(0, 160)}`);
 
-          toolExecutedInLastStep = true;
-
           const resultJson = JSON.stringify(result);
           lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 700)}`;
           work.push({ role: 'assistant', content: reply });
@@ -270,15 +263,18 @@ export class OllamaLLM {
             `If this is empty or an error, you MUST try again with a corrected query or a different tool (output a NEW tool JSON) — ` +
             `do not give up after one attempt. Danish folder names are English on disk: overførsler→Downloads, ` +
             `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. To go DEEPER into a folder, reuse the full ` +
-            `absolute 'path' from a match above as the 'root'. Only once you actually have the info, answer Mikkel in plain English with NO JSON.` });
+            `absolute 'path' from a match above as the 'root'. When you have the info, output a JSON with {"speak": "your answer", "tool": null}.` });
         }
         if (lastToolNote) this.lastToolContext = lastToolNote;
 
-        if (finalText === null || !finalText.trim()) {
-          finalText = await this.complete([...work, {
+        let finalText = allSpoken.join(' ').trim();
+        if (!finalText) {
+          const fallbackReply = await this.complete([...work, {
             role: 'user',
-            content: 'Give Mikkel your best plain-English answer now based on what you found. No tools, no JSON. If you genuinely could not find it, say so briefly.',
+            content: 'Give Mikkel your best plain-English answer now based on what you found. Output JSON with {"speak": "...", "tool": null}.',
           }]);
+          const fallbackCall = parseToolCall(fallbackReply);
+          finalText = fallbackCall?.speak || fallbackReply;
         }
 
         // <SKIP> => stay silent.
@@ -323,6 +319,7 @@ export class OllamaLLM {
         messages: [{ role: 'system', content: systemPrompt }, ...norm],
         stream: false,
         think: false,
+        format: 'json',
         options: { temperature: 0.5, top_p: 0.9, num_ctx: 32768, num_predict: 1024 },
       }),
       signal: AbortSignal.timeout(180_000),
@@ -344,13 +341,15 @@ export class OllamaLLM {
     };
     // Task-mode system prompt: no <SKIP>, no chit-chat — execute and verify.
     const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are autonomously executing a task for Mikkel. ` +
-      `Work step by step with tools. NEVER reply <SKIP>. Do not chit-chat or ask questions. Either output ONE ` +
-      `tool-call JSON, or — only when the task is fully done and verified — a concise final summary with NO JSON.`;
+      `Work step by step with tools. NEVER set "speak" to <SKIP>. Do not chit-chat or ask questions. ALWAYS output ` +
+      `the JSON schema. When the task is fully done and verified, output JSON with "tool": null and your final concise summary in "speak".`;
     try {
       TaskRegistry.update('planning');
       const plan = await this.complete([{ role: 'user',
-        content: `Make a short numbered plan (max 5 steps) to accomplish this with your tools. Plan only — no tool calls yet.\nTASK: ${description}` }], taskSys);
-      console.log(`[Task] 📋 plan:\n${plan}`);
+        content: `Make a short numbered plan (max 5 steps) to accomplish this with your tools. Output JSON with "speak": "the plan" and "tool": null.\nTASK: ${description}` }], taskSys);
+      
+      const parsedPlan = parseToolCall(plan)?.speak || plan;
+      console.log(`[Task] 📋 plan:\n${parsedPlan}`);
       TaskRegistry.log('made a plan');
 
       const work: Array<{ role: string; content: string }> = [{ role: 'user',
@@ -358,26 +357,25 @@ export class OllamaLLM {
 
       let result = '';
       const MAX = 14;
-      let toolExecutedInLastStep = false;
       for (let step = 0; step < MAX; step++) {
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
         const call = parseToolCall(reply);
+        
         if (!call) {
-          // Reject <SKIP>/empty as a result — keep executing.
-          // Also reject false claims of completed actions (same guard as the main loop).
-          const taskFalseClaim = !toolExecutedInLastStep && /\b(i'?ve|i have|i('?m| am)|jeg har|jeg)\b[\s\S]{0,60}\b(moved?|moving|updated?|updating|written|writing|wrote|created?|creating|deleted?|deleting|renamed?|renaming|copied|copying|saved?|saving|added|adding|removed|removing|fixed|fixing|rewritten|re-?written|rewriting|re-?writing|formatted|re-?formatted|formatting|re-?formatting|changed|changing|modified|modifying|placed|placing|relocated|relocating|overwritten|overwriting|opened|opening|flettet|slettet|oprettet|skrevet|flyttet|gemt|opdateret|rettet|ændret|tilføjet|omdøbt|redigeret)\b/i.test(reply);
-          
-          toolExecutedInLastStep = false;
-
-          if (reply.trim() && !SKIP_RE.test(reply) && !taskFalseClaim) { result = reply; break; }
-          work.push({ role: 'user', content: taskFalseClaim
-            ? 'You CLAIMED you did something but called no tool. Output the tool-call JSON to ACTUALLY do it.'
-            : 'Do not stop or reply <SKIP>. Call the next tool, or give the final verified summary now.' });
+          work.push({ role: 'assistant', content: reply });
+          work.push({ role: 'user', content: 'You MUST output valid JSON matching the {"speak": "...", "tool": "...", "args": {...}} schema.' });
           continue;
         }
+
+        if (!call.tool || call.tool === 'null' || call.tool === 'reply') {
+           // Task done. The result is in call.speak.
+           result = call.speak || 'Task finished without description.';
+           break;
+        }
+
         if (call.tool === 'start_background_task') { // already in a task — don't recurse
-          work.push({ role: 'user', content: 'You are already working on the task. Use real tools or finish.' });
+          work.push({ role: 'user', content: 'You are already working on the task. Use real tools or finish by setting "tool": null.' });
           continue;
         }
         const tStep = Date.now();
@@ -385,14 +383,14 @@ export class OllamaLLM {
         console.log(`[Task]    step ${step + 1}: ${call.tool}(${JSON.stringify(call.args).slice(0, 80)}) ${Date.now() - tStep}ms → ${JSON.stringify(res).slice(0, 120)}`);
         TaskRegistry.log(`${call.tool} → ${JSON.stringify(res).slice(0, 90)}`);
         
-        toolExecutedInLastStep = true;
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content:
           `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 1800)}\n` +
-          `Keep going until the task is fully done AND verified, then give a concise final summary with NO JSON.` });
+          `Keep going until the task is fully done AND verified, then finish by setting "tool": null and putting your summary in "speak".` });
       }
       if (!result.trim()) {
-        result = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did, in plain English. No tools, no JSON.' }], taskSys);
+        const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"speak": "...", "tool": null}.' }], taskSys);
+        result = parseToolCall(fb)?.speak || fb;
       }
       console.log(`[Task] ✓ done in ${Math.round((Date.now() - t0) / 1000)}s`);
       TaskRegistry.finish(result || 'Done.');
@@ -434,6 +432,7 @@ export class OllamaLLM {
         num_ctx: 32768,       // Gemma 4 understøtter op til 128K — 32K er godt til daglig brug
         num_predict: 2048,    // Max output tokens
       },
+      format: 'json',
     });
 
     const res = await fetch(`${this.baseUrl}/api/chat`, {
@@ -472,7 +471,7 @@ export class OllamaLLM {
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, messages, stream: true, think: false }),
+      body: JSON.stringify({ model: this.model, messages, stream: true, think: false, format: 'json' }),
       signal: AbortSignal.timeout(240_000),
     });
 
