@@ -377,10 +377,13 @@ export class OllamaLLM {
       bus.emit('llm:response', { text, sessionId: sid, model: this.model, spoken: true });
       bus.emit('tts:speaking', { text, sessionId: sid });
     };
-    // Task-mode system prompt: no chit-chat — execute and verify.
-    const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are autonomously executing a task for Mikkel. ` +
-      `Work step by step with tools. Do not chit-chat or ask questions. ALWAYS output ` +
-      `the JSON schema. When the task is fully done and verified, output JSON with "done": true and your final concise summary in "speak".`;
+    // Task-mode system prompt: Grace IS the worker — she executes directly, herself.
+    const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are executing this task RIGHT NOW, yourself, one tool call at a time. ` +
+      `You are NOT delegating and nothing runs in the background — YOU do every step. ` +
+      `Do NOT call start_background_task or task_status; they do nothing here. ` +
+      `Use real tools: write_file (it creates parent folders automatically), create_folder, list_dir, read_file, edit_file, move_file. ` +
+      `Take ONE concrete action per reply; after a change, verify it with read_file/list_dir. ` +
+      `Only when the work is truly done AND verified, reply with "done": true and a concise summary in "speak".`;
     try {
       TaskRegistry.update('planning');
       const plan = await this.complete([{ role: 'user',
@@ -391,16 +394,19 @@ export class OllamaLLM {
       TaskRegistry.log('made a plan');
 
       const work: Array<{ role: string; content: string }> = [{ role: 'user',
-        content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. When the task is truly done, output JSON with "done": true and your summary in "speak".\nTASK: ${description}\nYOUR PLAN:\n${parsedPlan}` }];
+        content: `Execute this now, yourself, one tool at a time. Begin with the FIRST concrete action (a real tool call like write_file or create_folder) — do NOT call start_background_task or task_status.\nTASK: ${description}\nYOUR PLAN:\n${parsedPlan}` }];
 
       let result = '';
+      let didRealWork = false;            // did any REAL tool (not status/delegation) actually run?
+      let rejectedEmptyDone = false;
+      const META = new Set(['start_background_task', 'task_status']);  // meaningless inside a task
       const MAX = 24;   // deeper autonomous tasks are fine — local, no token cost
       for (let step = 0; step < MAX; step++) {
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
         console.log(`[Task] 🧠 Raw reply:\n${reply}`);
         const call = parseToolCall(reply);
-        
+
         if (!call) {
           console.warn(`[Task] ⚠️ Invalid JSON reply from model: ${reply}`);
           work.push({ role: 'assistant', content: reply });
@@ -408,10 +414,13 @@ export class OllamaLLM {
           continue;
         }
 
-        // Run any requested tools FIRST so "done" can never skip an unrun action.
-        const calls = call.calls.filter(c => c.tool !== 'start_background_task'); // no recursion into another task
-        if (calls.length > 0) {
-          const runs = await Promise.all(calls.map(async (c) => {
+        const realCalls = call.calls.filter(c => !META.has(c.tool));
+        const triedMeta = call.calls.some(c => META.has(c.tool));
+
+        // Run any REAL tools first, so "done" can never skip unrun work.
+        if (realCalls.length > 0) {
+          didRealWork = true;
+          const runs = await Promise.all(realCalls.map(async (c) => {
             const tStep = Date.now();
             const res = await runTool(c.tool, c.args);
             console.log(`[Task]    step ${step + 1}: ${c.tool}(${JSON.stringify(c.args).slice(0, 80)}) ${Date.now() - tStep}ms → ${JSON.stringify(res).slice(0, 120)}`);
@@ -420,25 +429,54 @@ export class OllamaLLM {
           }));
           const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 128000)}`).join('\n');
           const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
-            ? 'You changed a file — you MUST now VERIFY with read_file/list_dir (check totalLines matches what you intended) before setting "done": true. ' : '';
+            ? 'You changed something — now VERIFY with read_file/list_dir before finishing. ' : '';
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content:
             `${combined}\n${verify}` +
-            `Keep going until the task is fully done AND verified, then finish with "done": true and your summary in "speak".` });
+            `Continue with the next concrete step, or set "done": true (summary in "speak") once everything is actually done and verified.` });
+          continue;
+        }
+
+        // No real tools this step.
+        if (triedMeta) {
+          // Model tried to delegate/poll — it doesn't realize it IS the worker. Correct it hard.
+          console.warn(`[Task] ⚠️ model called start_background_task/task_status inside the task — correcting`);
+          work.push({ role: 'assistant', content: reply });
+          work.push({ role: 'user', content:
+            'STOP — you are doing this task YOURSELF, right now. start_background_task and task_status do nothing here. ' +
+            'Take the next REAL action: write_file (it creates parent folders), create_folder, list_dir, read_file, edit_file. What is your next file operation?' });
           continue;
         }
 
         if (call.done) {
-          result = call.speak || 'Task finished without description.';
+          if (!didRealWork) {
+            // Claiming done without ever acting — the false-success bug. Reject once, then bail honestly.
+            if (rejectedEmptyDone) break;
+            rejectedEmptyDone = true;
+            work.push({ role: 'assistant', content: reply });
+            work.push({ role: 'user', content:
+              "You haven't actually done anything yet — no real tool has run, so nothing changed. Do the FIRST real step now (e.g. write_file / create_folder). Don't say it's done until it truly is." });
+            continue;
+          }
+          result = call.speak || 'Task finished.';
           break;
         }
 
-        // No tools, not done — just thinking out loud. Nudge toward the next concrete step.
+        // No tools, not done — thinking out loud. Nudge to a concrete action.
         work.push({ role: 'assistant', content: reply });
-        work.push({ role: 'user', content: 'What is your next step? Call a tool, or set "done": true (with your summary in "speak") if the task is finished and verified.' });
+        work.push({ role: 'user', content: 'What is your next step? Call a REAL tool now, or set "done": true (summary in "speak") only if the work is genuinely finished and verified.' });
+      }
+
+      // Honest outcome: never announce success if no real work happened.
+      if (!didRealWork) {
+        result = "I couldn't actually carry that out — I didn't manage to complete any of the steps. Let's try again, maybe broken into smaller pieces.";
+        console.warn('[Task] ✗ finished without doing any real work');
+        TaskRegistry.fail(result);
+        announce(result);
+        return;
       }
       if (!result.trim()) {
-        const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"thought": "...", "tool": null, "speak": "...", "done": true}.' }], taskSys);
+        const fb = await this.complete([...work, { role: 'user', content: 'Summarise honestly what you ACTUALLY did (only what really happened). Output JSON with {"thought":"...","tool":null,"speak":"...","done":true}.' }], taskSys);
         result = parseToolCall(fb)?.speak || fb;
       }
       console.log(`[Task] ✓ done in ${Math.round((Date.now() - t0) / 1000)}s`);
