@@ -35,8 +35,12 @@ _Updated: 2026-06-04 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
   the task loop runs tools BEFORE honoring `done:true` so a final action can't be skipped.
 - **Prompt clarity:** `edit_file` (not read+overwrite) for partial changes; confirm odd STT before
   heavy actions; per-step instruction sprawl trimmed. `personality.json` v3.
-- **Auto-develop foundation:** `scripts/scaffold-tool.mjs` adds/validates/reverts a tool safely
-  (build + smoke + auto-revert; surfaces the real tsc error). See `docs/auto-develop.md`.
+- **Speak timing + deeper loops:** intermediate "On it…" narration no longer mashed onto the final
+  answer (only the answer is spoken); MAX_STEPS 5→8, task MAX 14→24 (tokens are free locally).
+- **Auto-develop:** `scripts/scaffold-tool.mjs` (build + smoke + auto-revert, real tsc error) **plus a
+  Docker sandbox** (`sandbox/` + `scripts/sandbox-tool.mjs`) that builds + RUNS candidate tools with no
+  host filesystem / no network — verified a malicious tool can't escape to `C:\Users\mikke`. See
+  `docs/auto-develop.md`.
 
 ## Optional / opt-in
 - `GRACE_TTS_PLAYBACK="server"` — persistent stereo audio player (smoother over BT); off by default.
@@ -44,7 +48,7 @@ _Updated: 2026-06-04 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 ## Next (see ROADMAP.md)
 1. **Live-test + merge** `feat/reliability-and-batch-tools` (voice session: real paths, batched
    calls, verify-before-done, STT-confirm), then land it on main.
-2. **`create_tool`** Grace tool on top of `scaffold-tool.mjs` + the execution-safety decision
-   (review-mode in-process first, then Docker sandbox for unattended self-expansion) — see docs/auto-develop.md.
+2. **`create_tool`** Grace tool — thin wrapper over `sandbox-tool.mjs --promote` (sandbox is built);
+   decide the promote policy (auto-promote trivial tools vs review-gate file/network ones). docs/auto-develop.md.
 3. take_screenshot + describe_screen (LLaVA vision); filesystem navigation index.
 4. better-sqlite3 (P4); scheduler (P2); GitHub remote + push (off-machine backup).

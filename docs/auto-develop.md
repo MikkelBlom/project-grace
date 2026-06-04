@@ -3,7 +3,7 @@
 The north star (ROADMAP P5): **Grace writes her own tools, tests them, and plugs them in.**
 One-file-per-tool makes this conflict-free — a tool is just a new file + one import line.
 
-This doc describes the workflow, what exists today, and the one open safety decision.
+This doc describes the workflow, what exists today (incl. the Docker sandbox), and the remaining promote decision.
 
 ## The loop
 
@@ -33,30 +33,45 @@ prints the real `error TSxxxx` line — so the tree never ends up broken and the
 Proven: stub add + smoke + remove leaves the tree clean; a type-error tool fails the build and
 reverts cleanly with the exact compiler error surfaced.
 
+**`scripts/sandbox-tool.mjs` + `sandbox/`** — the SAFE place to build AND RUN untrusted generated code:
+```bash
+node scripts/sandbox-tool.mjs <name> --from <file.ts> --smoke '{"a":1}'         # validate in isolation
+node scripts/sandbox-tool.mjs <name> --from <file.ts> --smoke '{}' --promote     # + land in real tree on pass
+node scripts/sandbox-tool.mjs <name> --from <file.ts> --allow-net --rebuild      # net for the tool; rebuild image
+```
+Builds + runs the candidate inside an ephemeral Docker container (`node:24-alpine`) with **no host
+filesystem, `--network none` by default, and CPU/memory/pid caps**, then prints a JSON verdict. A copy
+of the real `@grace/tools` is baked in so a sandbox pass == a real build pass. With `--promote`, a
+passing tool is handed to `scaffold-tool.mjs` (which re-builds + auto-reverts in the real tree). Use
+`--rebuild` after changing the tools framework.
+
+Proven: a valid tool passes + smoke-runs; a type-error tool fails at the build stage with the exact
+`error TSxxxx`; a malicious tool writing to `os.homedir()` writes to the container's `/root` and leaves
+the host **untouched** (verified — nothing lands on `C:\Users\mikke`).
+
 ## What's left
 
-- **`create_tool` Grace tool** — a thin wrapper so Grace can drive the scaffolder from a background
-  task (PROPOSE→VALIDATE→FIX in the autonomous loop). Trivial once the safety decision below is made.
+- **`create_tool` Grace tool** — a thin wrapper over `sandbox-tool.mjs` so Grace can drive
+  PROPOSE→VALIDATE→FIX→PROMOTE from a background task. The safe execution layer it needs now exists.
 - **Hot-load without restart** — today a new tool is live after the next app start (explicit imports,
   NodeNext; see HANDOFF "Dynamic Loader vs Explicit Imports"). Good enough to start; hot-load later.
 - **`auto_git_commit`** — commit the new tool file + import after it goes green.
 
-## ⚠️ The open safety decision: where does generated code RUN?
+## ⚠️ Remaining decision: the PROMOTE policy
 
-Validating a tool **executes** its module-load + `run()` code with full Node privileges (it can
-touch the filesystem, network, etc.). That is fine when a human/AI has read the source first — it is
-**not** fine for voice-triggered, unreviewed code.
+The hard safety problem — *where does unreviewed generated code run?* — is solved: the Docker sandbox
+above builds and executes candidates with **no host access**. What's left to decide is the **promote
+policy**: once a tool passes in the sandbox, does it land in the real tree automatically, or only after
+Mikkel okays the diff?
 
-Two paths (pick before wiring `create_tool` to voice):
+- **Auto-promote** everything that passes — fastest path to self-expansion; fine for low-risk tools
+  (pure compute, read-only public APIs).
+- **Review-gate** — Grace proposes + sandbox-validates, then shows/logs the diff and waits for a "yes"
+  before promoting. Safer for tools that touch files or the network.
 
-1. **In-process (fast, riskier).** Grace builds + runs generated tools directly in the Electron main
-   process. Acceptable only because this is a single-user machine the user owns — but a hallucinated
-   `rm -rf`-equivalent would run for real. Mitigation: keep the home-folder gate, diff the source for
-   review, and require a spoken confirmation before the first run of a new tool.
-2. **Sandbox (safe, more work — ROADMAP P4/P5).** Build + smoke-test generated tools inside a Docker
-   container (or a locked-down child process) with no access to the real filesystem; only promote to
-   the real tree after it passes. This is the original vision and the right long-term answer.
+**Recommendation:** `create_tool` always validates in the sandbox (unattended is safe now), auto-promotes
+trivial tools, and asks for confirmation for anything that writes files or uses the network. Build it as
+a thin wrapper over `sandbox-tool.mjs --promote`.
 
-**Recommendation:** ship `create_tool` against the scaffolder in **review mode first** (Grace
-proposes, the diff is shown/logged, the user okays it), then add the Docker sandbox for unattended
-self-expansion. The scaffolder already gives the safe build/test/revert core either way.
+> The in-process path (running generated code directly in Electron) is no longer needed for safety — use
+> the sandbox. Keep the home-folder gate on the real tools regardless.
