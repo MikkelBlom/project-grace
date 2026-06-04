@@ -132,13 +132,19 @@ export interface TaskState {
 class TaskRegistryImpl {
   current: TaskState | null = null;
   cancelRequested = false;
+  paused = false;
   start(description: string): TaskState {
     this.cancelRequested = false;
+    this.paused = false;
     this.current = { id: 'task-' + Date.now(), description, phase: 'planning', log: [], done: false, startedAt: Date.now() };
     return this.current;
   }
   /** Ask the running task to stop at its next step. Returns false if nothing is running. */
-  requestCancel(): boolean { if (this.current && !this.current.done) { this.cancelRequested = true; return true; } return false; }
+  requestCancel(): boolean { if (this.current && !this.current.done) { this.cancelRequested = true; this.paused = false; return true; } return false; }
+  /** Ask the running task to hold at its next step. Returns false if nothing is running. */
+  requestPause(): boolean { if (this.current && !this.current.done) { this.paused = true; return true; } return false; }
+  /** Release a paused task. */
+  resume(): void { this.paused = false; }
   update(phase: string): void { if (this.current && !this.current.done) this.current.phase = phase; }
   log(line: string): void { if (this.current) { this.current.log.push(line); if (this.current.log.length > 25) this.current.log.shift(); } }
   finish(result: string): void { if (this.current) { this.current.result = result; this.current.done = true; this.current.phase = 'done'; } }
@@ -153,3 +159,58 @@ class TaskRegistryImpl {
   }
 }
 export const TaskRegistry = new TaskRegistryImpl();
+
+// ── Mission registry (long-running autonomous "work through a backlog for hours") ──
+// A mission is an objective + a backlog of items (e.g. tools to build). The driver works
+// one item at a time, surviving per-item step caps; this holds the cross-item state and
+// the pause/cancel flags so a hotkey can halt the whole run between items.
+export interface MissionState {
+  id: string;
+  objective: string;
+  backlog: string[];
+  completed: string[];
+  failed: string[];
+  current?: string;
+  phase: string;
+  startedAt: number;
+  done: boolean;
+}
+class MissionRegistryImpl {
+  current: MissionState | null = null;
+  cancelRequested = false;
+  paused = false;
+  start(objective: string, backlog: string[] = []): MissionState {
+    this.cancelRequested = false;
+    this.paused = false;
+    this.current = {
+      id: 'mission-' + Date.now(), objective, backlog: [...backlog], completed: [], failed: [],
+      phase: 'planning', startedAt: Date.now(), done: false,
+    };
+    return this.current;
+  }
+  setBacklog(items: string[]): void { if (this.current) this.current.backlog = [...items]; }
+  addToBacklog(items: string[]): void { if (this.current) this.current.backlog.push(...items); }
+  /** Pull the next backlog item into "current" and return it, or undefined if the backlog is empty. */
+  nextItem(): string | undefined {
+    if (!this.current) return undefined;
+    const item = this.current.backlog.shift();
+    this.current.current = item;
+    return item;
+  }
+  completeCurrent(note?: string): void { if (this.current?.current) { this.current.completed.push(note || this.current.current); this.current.current = undefined; } }
+  failCurrent(note?: string): void { if (this.current?.current) { this.current.failed.push(note || this.current.current); this.current.current = undefined; } }
+  phase(p: string): void { if (this.current && !this.current.done) this.current.phase = p; }
+  finish(): void { if (this.current) { this.current.done = true; this.current.phase = 'done'; this.current.current = undefined; } }
+  requestCancel(): boolean { if (this.current && !this.current.done) { this.cancelRequested = true; this.paused = false; return true; } return false; }
+  requestPause(): boolean { if (this.current && !this.current.done) { this.paused = true; return true; } return false; }
+  resume(): void { this.paused = false; }
+  isRunning(): boolean { return !!this.current && !this.current.done; }
+  status(): string {
+    const m = this.current;
+    if (!m) return 'No mission is running.';
+    const mins = Math.round((Date.now() - m.startedAt) / 60000);
+    const head = `Mission "${m.objective.slice(0, 80)}" — ${m.done ? 'finished' : (this.paused ? 'paused' : m.phase)}, ~${mins} min in.`;
+    return `${head} Done ${m.completed.length}${m.failed.length ? `, failed ${m.failed.length}` : ''}, ${m.backlog.length} left in the backlog.${m.current ? ` Currently: ${m.current}.` : ''}`;
+  }
+}
+export const MissionRegistry = new MissionRegistryImpl();

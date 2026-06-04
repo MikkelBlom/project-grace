@@ -16,14 +16,11 @@
 //   GRACE_KOKORO_SPEED=1.0
 // ─────────────────────────────────────────────
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn, type ChildProcess } from 'child_process';
 import { writeFile, unlink, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import { bus } from '@grace/core';
-
-const execAsync = promisify(exec);
 
 const KOKORO_URL = process.env.GRACE_KOKORO_URL   ?? 'http://localhost:8765';
 const VOICE      = process.env.GRACE_KOKORO_VOICE ?? 'af_heart';
@@ -39,11 +36,31 @@ export class KokoroTTS {
   private isAvailable = false;
   private queue: Array<{ text: string; sessionId: string }> = [];
   private isSpeaking = false;
+  /** The PowerShell playback child for the clip currently playing, so a stop can kill it mid-sentence. */
+  private currentChild: ChildProcess | null = null;
+  /** Set when a stop is requested so an in-flight synth/play resolves quietly instead of continuing. */
+  private stopRequested = false;
 
   constructor() {
     this.ensureTempDir();
     this.setupListeners();
     this.checkAvailability();
+  }
+
+  // ── Barge-in: stop speaking NOW and drop the queue ──
+  stop(): void {
+    this.stopRequested = true;
+    this.queue = [];
+    if (this.currentChild) {
+      try { this.currentChild.kill('SIGTERM'); } catch { /* already gone */ }
+      this.currentChild = null;
+    }
+    if (this.isSpeaking) {
+      this.isSpeaking = false;
+      console.log('[KokoroTTS] ⏹ speech stopped (barge-in)');
+      // Let the mic come back immediately — GraceCore resumes STT on tts:done.
+      bus.emit('tts:done', { sessionId: 'stopped' });
+    }
   }
 
   private async ensureTempDir(): Promise<void> {
@@ -83,14 +100,18 @@ export class KokoroTTS {
 
   private setupListeners(): void {
     bus.on('tts:speaking', ({ text, sessionId }) => {
+      this.stopRequested = false;   // a fresh utterance clears any prior stop latch
       this.queue.push({ text, sessionId });
       if (!this.isSpeaking) this.processQueue();
     });
+    bus.on('tts:stop', () => this.stop());
+    bus.on('control:stop', () => this.stop());
   }
 
   private async processQueue(): Promise<void> {
     let lastSession = '';
     while (this.queue.length > 0) {
+      if (this.stopRequested) break;   // barge-in: abandon the rest of the queue
       const item = this.queue.shift();
       if (!item) break;
       lastSession = item.sessionId;
@@ -98,7 +119,8 @@ export class KokoroTTS {
     }
     this.isSpeaking = false;
     // Emit tts:done ONCE, when the whole turn has drained — supports streamed sentences.
-    if (lastSession) bus.emit('tts:done', { sessionId: lastSession });
+    // If a stop already fired, stop() emitted tts:done, so don't emit a duplicate.
+    if (lastSession && !this.stopRequested) bus.emit('tts:done', { sessionId: lastSession });
   }
 
   // ── Core synthesis + playback ────────────────
@@ -170,12 +192,8 @@ $synth.Rate = 2
 $synth.Speak('${safeText}')`;
 
     const encoded = Buffer.from(script, 'utf16le').toString('base64');
-    const { stdout, stderr } = await execAsync(
-      `powershell -NoProfile -EncodedCommand ${encoded}`,
-      { timeout: 30_000 },
-    );
-    if (stdout?.trim()) console.log('[KokoroTTS]', stdout.trim());
-    if (stderr?.trim()) console.warn('[KokoroTTS] SAPI stderr:', stderr.trim());
+    // Via the killable spawn helper so SAPI speech can be barged-in too (output not captured here).
+    await this.runPowershellEncoded(encoded, 30_000);
   }
 
   // ── Playback ─────────────────────────────────
@@ -184,7 +202,27 @@ $synth.Speak('${safeText}')`;
     const winPath = wavPath.replace(/\//g, '\\');
     const script  = `(New-Object Media.SoundPlayer '${winPath.replace(/'/g, "''")}').PlaySync()`;
     const encoded = Buffer.from(script, 'utf16le').toString('base64');
-    await execAsync(`powershell -NoProfile -EncodedCommand ${encoded}`, { timeout: 600_000 });
+    await this.runPowershellEncoded(encoded, 600_000);
+  }
+
+  // Spawn PowerShell and keep the child handle so a barge-in stop() can kill playback
+  // mid-clip. Resolves on exit (or after the timeout, or if killed) — never rejects, so
+  // the queue drains cleanly whether speech finished or was interrupted.
+  private runPowershellEncoded(encoded: string, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const child = spawn('powershell', ['-NoProfile', '-EncodedCommand', encoded], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+      this.currentChild = child;
+      const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } }, timeoutMs);
+      const finish = () => {
+        clearTimeout(timer);
+        if (this.currentChild === child) this.currentChild = null;
+        resolve();
+      };
+      child.on('close', finish);
+      child.on('error', (e) => { console.warn('[KokoroTTS] playback spawn error:', e); finish(); });
+    });
   }
 
   isOnline(): boolean { return this.isAvailable; }

@@ -67,11 +67,10 @@ export class GraceCore {
       const lower = utterance.trim().toLowerCase();
       if (this.listenMode) {
         if (LISTEN_END_RE.test(lower)) {
-          this.listenMode = false;
-          this.listenBuffer.push(utterance.trim());
-          utterance = this.listenBuffer.join(' ').replace(/\s+/g, ' ').trim();
-          this.listenBuffer = [];
+          // Combine everything buffered (minus the closing phrase) and dispatch as one turn.
+          utterance = this.exitListenMode(false, utterance.trim());
           console.log(`[Core] 🎧 listen mode OFF — processing ${utterance.length} chars`);
+          if (!utterance) { bus.emit('overlay:show', { type: 'listening' }); return; }
           // fall through to normal dispatch with the combined text
         } else {
           this.listenBuffer.push(utterance.trim());
@@ -80,11 +79,7 @@ export class GraceCore {
           return; // stay silent, keep listening across the pause
         }
       } else if (LISTEN_START_RE.test(lower)) {
-        this.listenMode = true;
-        this.listenBuffer = [];
-        console.log('[Core] 🎧 listen mode ON — buffering until you say you are done');
-        bus.emit('overlay:show', { type: 'listening' });
-        bus.emit('tts:speaking', { text: "I'm listening — take your time, and tell me when you're done.", sessionId });
+        this.enterListenMode(sessionId);
         return;
       }
 
@@ -155,6 +150,40 @@ export class GraceCore {
       }, 500);
     });
 
+    // ── Control: barge-in / interrupt ─────────
+    // GraceCore owns its OWN state here (processing flag, listen mode, overlay). TTS stops
+    // speech via its own control:stop subscription; OllamaLLM cancels any task/mission and
+    // speaks the context-aware ack (it holds the task state). Splitting it this way keeps
+    // a single spoken ack and avoids two subsystems talking over each other.
+    bus.on('control:stop', ({ reason } = {}) => {
+      console.log(`[Core] ⏹ STOP${reason ? ` (${reason})` : ''}`);
+      if (this.listenMode) this.exitListenMode(true);   // discard the held buffer
+      this.isProcessing = false;
+      bus.emit('tts:stop', {});                         // belt-and-braces: flush speech regardless of subscriber order
+      bus.emit('overlay:show', { type: 'listening' });
+    });
+
+    bus.on('control:pause', () => { bus.emit('overlay:show', { type: 'thinking' }); });
+    bus.on('control:resume', () => { bus.emit('overlay:show', { type: 'thinking' }); });
+
+    // Toggle listen mode from a hotkey or the enter_listen_mode tool.
+    bus.on('control:listenMode', ({ on }) => {
+      if (on && !this.listenMode) this.enterListenMode(`ctl-${Date.now()}`);
+      else if (!on && this.listenMode) {
+        const combined = this.exitListenMode(false);
+        if (combined) {
+          this.isProcessing = true;
+          this.history.push({ role: 'user', content: combined, timestamp: new Date(), sessionId: this.sessionId, persist: true });
+          this.memory.addTurn(this.sessionId, 'user', combined);
+          const snap = this.history.slice(-20).map(t => ({ role: t.role === 'grace' ? 'assistant' : 'user', content: t.content }));
+          bus.emit('overlay:show', { type: 'thinking' });
+          bus.emit('llm:thinking', { sessionId: this.sessionId, text: combined, history: snap });
+        } else {
+          bus.emit('overlay:show', { type: 'listening' });
+        }
+      }
+    });
+
     // ── Mode change ───────────────────────────
     bus.on('system:modeChange', ({ mode, reason }) => {
       const prev = this.mode;
@@ -222,6 +251,31 @@ export class GraceCore {
 
       bus.emit('llm:thinking', { sessionId: sid, text: prompt });
     });
+  }
+
+  // ── Listen mode ("hold the floor") ───────────
+
+  /** Go silent and start buffering everything heard until an END phrase / hotkey / tool releases it. */
+  private enterListenMode(sessionId: string): void {
+    this.listenMode = true;
+    this.listenBuffer = [];
+    console.log('[Core] 🎧 listen mode ON — buffering until you say you are done');
+    bus.emit('overlay:show', { type: 'listening' });
+    bus.emit('tts:speaking', { text: 'Jeg lytter — tag dig god tid, og sig til når du er klar.', sessionId });
+  }
+
+  /**
+   * Leave listen mode. With `discard`, drop the buffer and return ''. Otherwise append
+   * `lastPart` (the closing utterance, which often carries the actual instruction) and
+   * return the whole buffered text as one combined utterance.
+   */
+  private exitListenMode(discard: boolean, lastPart = ''): string {
+    this.listenMode = false;
+    if (discard) { this.listenBuffer = []; return ''; }
+    if (lastPart) this.listenBuffer.push(lastPart);
+    const combined = this.listenBuffer.join(' ').replace(/\s+/g, ' ').trim();
+    this.listenBuffer = [];
+    return combined;
   }
 
   // ── Field note buffering ─────────────────────

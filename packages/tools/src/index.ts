@@ -9,8 +9,8 @@
 // ─────────────────────────────────────────────
 
 // ── Public API (re-exported from registry) ───────────────────────
-export type { ToolSpec, ToolInvocation, ToolCall, TaskState } from './registry.js';
-export { registerTool, listTools, describeTools, parseToolCall, runTool, fetchJson, TaskRegistry } from './registry.js';
+export type { ToolSpec, ToolInvocation, ToolCall, TaskState, MissionState } from './registry.js';
+export { registerTool, listTools, describeTools, parseToolCall, runTool, fetchJson, TaskRegistry, MissionRegistry } from './registry.js';
 
 // ── Side-effect imports: each file self-registers its tool(s) ────
 import './tools/get_location.js';

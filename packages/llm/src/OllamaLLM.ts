@@ -21,7 +21,7 @@ import os from 'os';
 import path from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { describeTools, parseToolCall, runTool, TaskRegistry } from '@grace/tools';
+import { describeTools, parseToolCall, runTool, TaskRegistry, MissionRegistry } from '@grace/tools';
 
 const OLLAMA_URL  = process.env.GRACE_OLLAMA_URL  ?? 'http://localhost:11434';
 const MODEL       = process.env.GRACE_LLM_MODEL   ?? 'gemma4:26b';
@@ -169,12 +169,52 @@ export class OllamaLLM {
   private lastToolContext = '';
   /** Resolved absolute paths extracted from the last tool result — prevents STT-based path hallucination. */
   private lastResolvedPaths: string[] = [];
+  /** Abort handle for the in-flight Ollama generation, so a barge-in stop ends it immediately. */
+  private currentAbort: AbortController | null = null;
+  /** Set by control:stop so a turn/task/mission abandons quietly instead of speaking a stale answer. */
+  private turnCancelled = false;
 
   constructor(model = MODEL, baseUrl = OLLAMA_URL) {
     this.model = model;
     this.baseUrl = baseUrl;
     this.setupListeners();
+    this.setupControlListeners();
     this.checkAvailability();
+  }
+
+  // ── Control: barge-in for the model side ─────
+  // GraceCore handles its own UI/processing state and TTS flushes itself; here we cancel the
+  // task/mission loops and abort any in-flight generation, then speak ONE context-aware ack.
+  private setupControlListeners(): void {
+    bus.on('control:stop', () => {
+      const wasBusy = TaskRegistry.isRunning() || MissionRegistry.isRunning();
+      this.turnCancelled = true;
+      try { this.currentAbort?.abort(); } catch { /* none in flight */ }
+      TaskRegistry.requestCancel();
+      MissionRegistry.requestCancel();
+      // Defer the ack so it queues AFTER TTS.stop() (same synchronous control:stop event) flushes.
+      setTimeout(() => bus.emit('tts:speaking', {
+        text: wasBusy ? 'Okay — jeg stopper og er klar igen.' : 'Okay.',
+        sessionId: `ctl-${Date.now()}`,
+      }), 80);
+    });
+    bus.on('control:pause', () => {
+      const ok = [TaskRegistry.requestPause(), MissionRegistry.requestPause()].some(Boolean);
+      setTimeout(() => bus.emit('tts:speaking', {
+        text: ok ? 'Pauser — sig til når jeg skal fortsætte.' : 'Der kører ikke noget at pause lige nu.',
+        sessionId: `ctl-${Date.now()}`,
+      }), 80);
+    });
+    bus.on('control:resume', () => {
+      const running = TaskRegistry.isRunning() || MissionRegistry.isRunning();
+      TaskRegistry.resume();
+      MissionRegistry.resume();
+      bus.emit('tts:speaking', { text: running ? 'Fortsætter.' : 'Der er ikke noget på pause.', sessionId: `ctl-${Date.now()}` });
+    });
+    bus.on('control:status', () => {
+      const status = MissionRegistry.isRunning() ? MissionRegistry.status() : TaskRegistry.status();
+      bus.emit('tts:speaking', { text: status, sessionId: `ctl-${Date.now()}` });
+    });
   }
 
   // ── Availability check ───────────────────────
@@ -246,6 +286,7 @@ export class OllamaLLM {
   private setupListeners(): void {
     bus.on('llm:thinking', async ({ sessionId, text, history }) => {
       if (!text) return; // Guard — no input to respond to
+      this.turnCancelled = false; // fresh turn clears any prior barge-in latch
 
       try {
         const turnStart = Date.now();
@@ -276,6 +317,7 @@ export class OllamaLLM {
         let step = 0;
         for (; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
+          if (this.turnCancelled) { console.log('[OllamaLLM] ⏹ turn cancelled (barge-in)'); return; }
           console.log(`[OllamaLLM] 🧠 Raw reply:\n${reply}`);
           const call = parseToolCall(reply);
           
@@ -386,6 +428,11 @@ export class OllamaLLM {
         bus.emit('tts:speaking', { text: finalText, sessionId });
         bus.emit('llm:response', { text: finalText, sessionId, model: this.model, spoken: true });
       } catch (err) {
+        // A barge-in abort lands here — swallow it quietly instead of speaking an error.
+        if (this.turnCancelled || /abort/i.test(String(err))) {
+          console.log('[OllamaLLM] ⏹ generation aborted (barge-in)');
+          return;
+        }
         console.error('[OllamaLLM] Chat error:', err);
         bus.emit('system:error', {
           source: 'OllamaLLM',
@@ -408,22 +455,42 @@ export class OllamaLLM {
       role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
       content: m.content,
     }));
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{ role: 'system', content: systemPrompt }, ...norm],
-        stream: false,
-        think: false,
-        format: 'json',
-        options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 4096 },
-      }),
-      signal: AbortSignal.timeout(180_000),
-    });
-    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
-    const data = await res.json() as { message?: { content?: string } };
-    return data.message?.content?.trim() ?? '';
+    // Use an abortable signal stored on the instance so control:stop can end generation
+    // mid-stream (barge-in), plus a manual 180s timeout fallback.
+    const ac = new AbortController();
+    this.currentAbort = ac;
+    const timer = setTimeout(() => { try { ac.abort(new Error('timeout')); } catch { /* noop */ } }, 180_000);
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: 'system', content: systemPrompt }, ...norm],
+          stream: false,
+          think: false,
+          format: 'json',
+          options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 4096 },
+        }),
+        signal: ac.signal,
+      });
+      if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
+      const data = await res.json() as { message?: { content?: string } };
+      return data.message?.content?.trim() ?? '';
+    } finally {
+      clearTimeout(timer);
+      if (this.currentAbort === ac) this.currentAbort = null;
+    }
+  }
+
+  // Block while a pause is requested, polling until resumed or cancelled. Lets a hotkey
+  // hold a long task/mission between steps without tearing it down.
+  private async waitWhilePaused(isPaused: () => boolean, isCancelled: () => boolean): Promise<void> {
+    let logged = false;
+    while (isPaused() && !isCancelled()) {
+      if (!logged) { console.log('[Task] ⏸ paused — waiting to resume'); logged = true; }
+      await new Promise(r => setTimeout(r, 400));
+    }
   }
 
   // ── Autonomous background task: plan → execute → verify → report back ──
@@ -465,14 +532,15 @@ export class OllamaLLM {
       const MAX = 24;   // deeper autonomous tasks are fine — local, no token cost
       let step = 0;
       for (; step < MAX; step++) {
+        await this.waitWhilePaused(() => TaskRegistry.paused, () => TaskRegistry.cancelRequested);
         if (TaskRegistry.cancelRequested) {
           console.warn('[Task] ⏹ cancelled by Mikkel');
           TaskRegistry.fail('cancelled by Mikkel');
-          announce("Okay, I've stopped that task.");
-          return;
+          return;   // the control:stop ack already told Mikkel — don't double-speak
         }
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
+        if (TaskRegistry.cancelRequested || this.turnCancelled) { TaskRegistry.fail('cancelled by Mikkel'); return; }
         console.log(`[Task] 🧠 Raw reply:\n${reply}`);
         const call = parseToolCall(reply);
 
@@ -568,6 +636,11 @@ export class OllamaLLM {
       bus.emit('overlay:notification', { text: '✅ Task done', level: 'info', duration: 5000 });
       announce(`Okay, I'm done. ${result || ''}`.trim());
     } catch (err) {
+      if (TaskRegistry.cancelRequested || this.turnCancelled || /abort/i.test(String(err))) {
+        TaskRegistry.fail('cancelled by Mikkel');
+        console.log('[Task] ⏹ aborted (barge-in)');
+        return;
+      }
       TaskRegistry.fail(String(err));
       announce(`I hit a problem with that task: ${err}`);
     }

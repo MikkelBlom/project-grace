@@ -27,6 +27,20 @@ export interface GraceEvents {
   'tool:execute': ToolCall;
   'tool:result': ToolResult;
 
+  // ── Control (barge-in / interrupt) ────────
+  /** Stop everything NOW: cancel any task/mission, kill speech + flush the queue, exit listen mode, return to listening. */
+  'control:stop': { reason?: string };
+  /** Pause the running task/mission at its next checkpoint. */
+  'control:pause': { reason?: string };
+  /** Resume a paused task/mission. */
+  'control:resume': { reason?: string };
+  /** Request a spoken status report of whatever Grace is currently doing. */
+  'control:status': Record<string, never>;
+  /** Enter or leave "hold the floor" listen mode (hotkey or the enter_listen_mode tool). */
+  'control:listenMode': { on: boolean };
+  /** Stop in-flight speech and drop anything queued (handled by TTS). */
+  'tts:stop': Record<string, never>;
+
   // ── System ────────────────────────────────
   'system:modeChange': { mode: GraceMode; reason?: string };
   'system:contextUpdate': { activeApp: string; windowTitle: string; url?: string; isFullscreen?: boolean };

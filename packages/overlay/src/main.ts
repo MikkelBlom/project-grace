@@ -44,6 +44,9 @@ let powerManager:    PowerManager     | null = null;
 let contextDetector: ContextDetector  | null = null;
 let debugWin:        DebugWindow      | null = null;
 let currentDisplayIndex = defaultConfig.overlay.displayIndex;
+// Hotkey toggle state (local mirror — re-syncs on next press if it drifts from real state).
+let hotkeyPaused = false;
+let hotkeyListening = false;
 
 // ── Display helpers ─────────────────────────────
 
@@ -240,6 +243,31 @@ function registerShortcuts(): void {
   // Ctrl+Shift+L — toggle debug overlay
   globalShortcut.register('CommandOrControl+Shift+L', () => {
     debugWin?.toggle();
+  });
+
+  // ── Barge-in / interrupt (work even while Grace is speaking — the mic is deaf then) ──
+
+  // Ctrl+Shift+S — STOP everything now (cancel task/mission, kill speech, back to listening)
+  globalShortcut.register('CommandOrControl+Shift+S', () => {
+    hotkeyPaused = false;
+    bus.emit('control:stop', { reason: 'hotkey' });
+  });
+
+  // Ctrl+Shift+Space — pause / resume the running task or mission (toggles)
+  globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    hotkeyPaused = !hotkeyPaused;
+    bus.emit(hotkeyPaused ? 'control:pause' : 'control:resume', { reason: 'hotkey' });
+  });
+
+  // Ctrl+Shift+. — speak a status report of whatever Grace is doing
+  globalShortcut.register('CommandOrControl+Shift+.', () => {
+    bus.emit('control:status', {});
+  });
+
+  // Ctrl+Shift+H — toggle "hold the floor" listen mode (backup for the spoken trigger)
+  globalShortcut.register('CommandOrControl+Shift+H', () => {
+    hotkeyListening = !hotkeyListening;
+    bus.emit('control:listenMode', { on: hotkeyListening });
   });
 }
 
