@@ -34,9 +34,10 @@ export function describeTools(): string {
     '',
     'You MUST ALWAYS output your response as a SINGLE JSON object in the exact following format:',
     '{',
-    '  "speak": "Text you want to say to Mikkel (leave empty to work silently)",',
+    '  "thought": "Think step-by-step about what Mikkel needs and which tool to use (required)",',
     '  "tool": "name of the tool to call, or null if no tool is needed",',
     '  "args": { "param": "value" },',
+    '  "speak": "Text you want to say to Mikkel out loud (leave empty to work silently)",',
     '  "done": false',
     '}',
     'Set "done" to true ONLY when you have fully completed the background task. For anything needing live or local data, you MUST set "tool" and "args". NEVER guess or refuse. You can set both "speak" and "tool" in the same response to explain what you are doing while doing it.',
@@ -44,7 +45,7 @@ export function describeTools(): string {
   return lines.join('\n');
 }
 
-export interface ToolInvocation { tool: string; args: Record<string, any>; speak: string; done: boolean; }
+export interface ToolInvocation { tool: string; args: Record<string, any>; speak: string; done: boolean; thought: string; }
 
 export function parseToolCall(text: string): ToolInvocation | null {
   const parse = (s: string): ToolInvocation | null => {
@@ -55,7 +56,8 @@ export function parseToolCall(text: string): ToolInvocation | null {
           tool: typeof obj.tool === 'string' ? obj.tool : '',
           args: typeof obj.args === 'object' && obj.args !== null ? obj.args : {},
           speak: typeof obj.speak === 'string' ? obj.speak : '',
-          done: !!obj.done
+          done: !!obj.done,
+          thought: typeof obj.thought === 'string' ? obj.thought : ''
         };
       }
     } catch {}

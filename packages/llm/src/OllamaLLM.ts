@@ -222,11 +222,12 @@ export class OllamaLLM {
 
         for (let step = 0; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
+          console.log(`[OllamaLLM] 🧠 Raw reply:\n${reply}`);
           const call = parseToolCall(reply);
           
           if (!call) {
             work.push({ role: 'assistant', content: reply });
-            work.push({ role: 'user', content: 'You MUST output valid JSON matching the required {"speak": "...", "tool": "...", "args": {...}} schema. Do not output plain text.' });
+            work.push({ role: 'user', content: 'You MUST output valid JSON matching the required {"thought": "...", "tool": "...", "args": {...}, "speak": "...", "done": false} schema. Do not output plain text.' });
             continue;
           }
 
@@ -263,7 +264,7 @@ export class OllamaLLM {
             `If this is empty or an error, you MUST try again with a corrected query or a different tool (output a NEW tool JSON) — ` +
             `do not give up after one attempt. Danish folder names are English on disk: overførsler→Downloads, ` +
             `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. To go DEEPER into a folder, reuse the full ` +
-            `absolute 'path' from a match above as the 'root'. When you have the info, finish by outputting a JSON with {"speak": "your answer", "tool": null}.` });
+            `absolute 'path' from a match above as the 'root'. When you have the info, finish by outputting a JSON with {"thought": "...", "tool": null, "speak": "your answer"}.` });
         }
         if (lastToolNote) this.lastToolContext = lastToolNote;
 
@@ -271,7 +272,7 @@ export class OllamaLLM {
         if (!finalText) {
           const fallbackReply = await this.complete([...work, {
             role: 'user',
-            content: 'Give Mikkel your best plain-English answer now based on what you found. Output JSON with {"speak": "...", "tool": null}.',
+            content: 'Give Mikkel your best plain-English answer now based on what you found. Output JSON with {"thought": "...", "tool": null, "speak": "..."}.',
           }]);
           const fallbackCall = parseToolCall(fallbackReply);
           finalText = fallbackCall?.speak || fallbackReply;
@@ -360,12 +361,13 @@ export class OllamaLLM {
       for (let step = 0; step < MAX; step++) {
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
+        console.log(`[Task] 🧠 Raw reply:\n${reply}`);
         const call = parseToolCall(reply);
         
         if (!call) {
           console.warn(`[Task] ⚠️ Invalid JSON reply from model: ${reply}`);
           work.push({ role: 'assistant', content: reply });
-          work.push({ role: 'user', content: 'You MUST output valid JSON matching the {"speak": "...", "tool": "...", "args": {...}} schema.' });
+          work.push({ role: 'user', content: 'You MUST output valid JSON matching the {"thought": "...", "tool": "...", "args": {...}, "speak": "...", "done": false} schema.' });
           continue;
         }
 
@@ -398,7 +400,7 @@ export class OllamaLLM {
           `Keep going until the task is fully done AND verified, then finish by setting "done": true and putting your summary in "speak".` });
       }
       if (!result.trim()) {
-        const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"speak": "...", "done": true}.' }], taskSys);
+        const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"thought": "...", "tool": null, "speak": "...", "done": true}.' }], taskSys);
         result = parseToolCall(fb)?.speak || fb;
       }
       console.log(`[Task] ✓ done in ${Math.round((Date.now() - t0) / 1000)}s`);
