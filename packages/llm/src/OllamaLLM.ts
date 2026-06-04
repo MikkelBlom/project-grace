@@ -246,7 +246,7 @@ export class OllamaLLM {
           }] : []),
           { role: 'user', content: text },
         ];
-        const MAX_STEPS = 5;
+        const MAX_STEPS = 8;   // cap, not a target — she stops early when done; tokens are free (local)
         let allSpoken: string[] = [];
         let lastToolNote = '';
 
@@ -261,16 +261,20 @@ export class OllamaLLM {
             continue;
           }
 
-          if (call.speak && call.speak.trim()) allSpoken.push(call.speak.trim());
-
-          if (call.calls.length === 0) break; // just speaking — turn is done
+          if (call.calls.length === 0) {
+            // No tool → her final answer; speak it. Intermediate tool-step "On it…"
+            // narration is intentionally NOT accumulated — speaking it only at the end
+            // mashed the goal and the answer into one clip after the silent work.
+            if (call.speak && call.speak.trim()) allSpoken.push(call.speak.trim());
+            break;
+          }
 
           // Background task is special: fire it and return (don't batch it with reads).
           const bg = call.calls.find(c => c.tool === 'start_background_task');
           if (bg) {
             const desc = String((bg.args as Record<string, unknown>)?.description || text);
             void this.runBackgroundTask(desc);
-            if (!call.speak) allSpoken.push("On it — I'll dig into that on my own and let you know when I'm done.");
+            allSpoken.push(call.speak?.trim() || "On it — I'll dig into that on my own and let you know when I'm done.");
             break;
           }
 
@@ -390,7 +394,7 @@ export class OllamaLLM {
         content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. When the task is truly done, output JSON with "done": true and your summary in "speak".\nTASK: ${description}\nYOUR PLAN:\n${parsedPlan}` }];
 
       let result = '';
-      const MAX = 14;
+      const MAX = 24;   // deeper autonomous tasks are fine — local, no token cost
       for (let step = 0; step < MAX; step++) {
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
