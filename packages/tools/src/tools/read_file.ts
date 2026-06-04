@@ -7,6 +7,7 @@ registerTool({
   params: {
     path: { type: 'string', description: 'absolute path to the file', required: true },
     lines: { type: 'number', description: 'max lines to return (optional; default 40, max 200)' },
+    show_line_numbers: { type: 'boolean', description: 'prefix each line with its line number (e.g. "[1] ") to help with targeted edits' },
   },
   async run(args) {
     const fs = await import('fs/promises');
@@ -22,6 +23,8 @@ registerTool({
     try { data = await fs.readFile(p, 'utf-8'); }
     catch (e) { return { path: p, error: String(e) }; }
     const all = data.split(/\r?\n/);
-    return { path: p, totalLines: all.length, returned: Math.min(maxLines, all.length), text: all.slice(0, maxLines).join('\n') };
+    const slice = all.slice(0, maxLines);
+    const text = args.show_line_numbers ? slice.map((l, i) => `[${i + 1}] ${l}`).join('\n') : slice.join('\n');
+    return { path: p, totalLines: all.length, returned: slice.length, text };
   },
 });
