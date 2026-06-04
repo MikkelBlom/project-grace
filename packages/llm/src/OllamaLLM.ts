@@ -19,7 +19,7 @@
 import { bus } from '@grace/core';
 import os from 'os';
 import path from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { describeTools, parseToolCall, runTool, TaskRegistry, MissionRegistry } from '@grace/tools';
 
@@ -680,6 +680,51 @@ export class OllamaLLM {
     }
   }
 
+  // Persist the whole mission state to a markdown file after every change, so stopping Grace
+  // (hotkey, voice, crash) never loses the plan or what she has built. Path is stable per mission.
+  private missionProgressPath = '';
+  private writeMissionProgress(): void {
+    const m = MissionRegistry.current;
+    if (!m) return;
+    try {
+      const repoRoot = path.resolve(PKG_DIR, '../../..');
+      const dir = path.join(repoRoot, 'data', 'missions');
+      mkdirSync(dir, { recursive: true });
+      this.missionProgressPath = path.join(dir, `${m.id}.md`);
+      const ts = new Date().toLocaleString('da-DK');
+      const lines = [
+        `# Mission progress`,
+        ``,
+        `**Mål:** ${m.objective}`,
+        ``,
+        `_Startet: ${new Date(m.startedAt).toLocaleString('da-DK')} · Opdateret: ${ts} · Status: ${m.done ? 'færdig' : m.phase}_`,
+        ``,
+        `## Opsummering`,
+        `- Bygget: **${m.completed.length}**`,
+        `- Venter på din godkendelse (rører filer/netværk): **${m.pending.length}**`,
+        `- Fejlede: **${m.failed.length}**`,
+        `- Tilbage i backlog: **${m.backlog.length}**`,
+        ``,
+        `## Bygget ✅`,
+        ...(m.completed.length ? m.completed.map(s => `- ${s}`) : ['_(ingen endnu)_']),
+        ``,
+        `## Venter på dit ja ⏳`,
+        ...(m.pending.length ? m.pending.map(s => `- ${s}`) : ['_(ingen)_']),
+        ``,
+        `## Fejlede ✗`,
+        ...(m.failed.length ? m.failed.map(s => `- ${s}`) : ['_(ingen)_']),
+        ``,
+        `## Resterende backlog`,
+        ...(m.current ? [`- ⏳ (i gang) ${m.current}`] : []),
+        ...(m.backlog.length ? m.backlog.map(s => `- [ ] ${s}`) : (m.current ? [] : ['_(tom)_'])),
+        ``,
+      ];
+      writeFileSync(this.missionProgressPath, lines.join('\n'), 'utf-8');
+    } catch (e) {
+      console.warn('[Mission] could not write progress file:', e);
+    }
+  }
+
   // ── Autonomous MISSION: plan a backlog, then build through it for hours ──
   // The key difference from a background task: a task is ONE bounded job that ends at its
   // step cap. A mission is an outer loop over a backlog where EACH item is its own bounded
@@ -708,11 +753,13 @@ export class OllamaLLM {
         return;
       }
       MissionRegistry.setBacklog(backlog);
+      this.writeMissionProgress();
       console.log(`[Mission] 📋 backlog (${backlog.length}):\n - ${backlog.join('\n - ')}`);
-      announce(`Planen er klar: ${backlog.length} ting på listen. Jeg bygger dem én ad gangen nu — sig 'status', 'pause' eller 'stop' når som helst.`);
+      announce(`Planen er klar: ${backlog.length} ting på listen, og jeg har skrevet den i progress-filen. Jeg bygger dem én ad gangen nu — sig 'status', 'pause' eller 'stop' når som helst.`);
 
       // ── EXECUTE: each backlog item is its own bounded sub-task ──
       const MAX_ITEMS = 80;   // safety ceiling; the backlog length normally bounds this
+      let gitDisabled = false;   // stop retrying commits once we learn we're not on a grace/* branch
       for (let i = 0; i < MAX_ITEMS; i++) {
         await this.waitWhilePaused(() => MissionRegistry.paused, () => MissionRegistry.cancelRequested);
         if (MissionRegistry.cancelRequested) break;
@@ -722,9 +769,21 @@ export class OllamaLLM {
         console.log(`[Mission] 🔨 item ${i + 1}: ${item}`);
         const res = await this.buildOneTool(item, objective);
         if (MissionRegistry.cancelRequested) break;
-        if (res.outcome === 'built') MissionRegistry.completeCurrent(res.note);
+        if (res.outcome === 'built') {
+          MissionRegistry.completeCurrent(res.note);
+          // Auto-commit the new tool to her own branch (no-op/warn if not on grace/*).
+          if (!gitDisabled) {
+            const commit: any = await runTool('git_commit', { message: res.note.replace(/^✓\s*/, '') });
+            if (commit?.committed) console.log(`[Mission] 📦 committed ${commit.hash}`);
+            else if (commit?.error && /grace\/\*/.test(String(commit.error))) {
+              gitDisabled = true;
+              console.warn('[Mission] git auto-commit OFF — not on a grace/* branch');
+            }
+          }
+        }
         else if (res.outcome === 'pending') MissionRegistry.pendingCurrent(res.note);
         else MissionRegistry.failCurrent(res.note);
+        this.writeMissionProgress();
         console.log(`[Mission]    ↳ ${res.outcome}: ${res.note}`);
         announce(res.note);   // concise per-item progress
       }
@@ -739,8 +798,10 @@ export class OllamaLLM {
         : `Mission færdig: ${built} tools bygget${pending ? `, ${pending} venter på din godkendelse` : ''}${failed ? `, ${failed} fejlede` : ''}, på ${mins} minutter.`;
       console.log(`[Mission] ✓ ${summary}`);
       MissionRegistry.finish();
+      this.writeMissionProgress();
+      if (this.missionProgressPath) console.log(`[Mission] 📄 progress saved: ${this.missionProgressPath}`);
       bus.emit('overlay:notification', { text: '✅ Mission done', level: 'info', duration: 6000 });
-      announce(summary);
+      announce(`${summary} Det hele står i progress-filen.`);
     } catch (err) {
       MissionRegistry.finish();
       if (MissionRegistry.cancelRequested || this.turnCancelled || /abort/i.test(String(err))) {
@@ -756,9 +817,10 @@ export class OllamaLLM {
   // backlog as a JSON array. Returns one descriptive line per item ("name: purpose").
   private async planBacklog(objective: string): Promise<string[]> {
     const planSys = `${currentSystemPrompt()}\n\nMISSION PLANNING MODE: You are planning a long autonomous build mission. ` +
-      `You MAY research first with web_search / fetch_url if it helps. Then propose a backlog of CONCRETE, mostly pure-compute / read-only tools to build for yourself. ` +
-      `Each must be a distinct, buildable tool with a clear single purpose. AVOID duplicating tools you already have (listed above). ` +
-      `Prefer tools that need no files or network so they auto-promote. When ready, reply with JSON: ` +
+      `Follow the steps in the OBJECTIVE exactly — if it asks you to write notes/analysis to files first, DO that using write_file before proposing the backlog (you may use any tools: write_file, web_search, fetch_url, list_dir, read_file). ` +
+      `Then propose a backlog of CONCRETE, distinct, buildable tools, each with a clear single purpose. AVOID duplicating tools you already have (listed above). ` +
+      `ORDER the backlog so the tools that need NO input from Mikkel come FIRST (pure-compute / read-only that auto-promote), and tools needing his involvement (OAuth, API keys, secrets, accounts) come LAST. ` +
+      `When ready, reply with JSON: ` +
       `{"thought":"...","tool":null,"done":true,"backlog":[{"name":"snake_case_name","purpose":"one concise line"}, ...]}. ` +
       `Aim for a generous list if the objective implies many (e.g. 20+).`;
     const work: Array<{ role: string; content: string }> = [{ role: 'user',
@@ -769,7 +831,7 @@ export class OllamaLLM {
       if (a !== -1 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch { /* noop */ } }
       return null;
     };
-    for (let step = 0; step < 6; step++) {
+    for (let step = 0; step < 12; step++) {   // room for phase-1/2 file writing + research before the backlog
       await this.waitWhilePaused(() => MissionRegistry.paused, () => MissionRegistry.cancelRequested);
       if (MissionRegistry.cancelRequested) return [];
       const reply = await this.complete(work, planSys);

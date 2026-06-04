@@ -33,6 +33,7 @@ import './tools/clipboard.js';
 import './tools/task_control.js';
 import './tools/mission_control.js';
 import './tools/enter_listen_mode.js';
+import './tools/git_commit.js';
 import './tools/cancel_task.js';
 import './tools/get_current_time.js';
 import './tools/roll_dice.js';
