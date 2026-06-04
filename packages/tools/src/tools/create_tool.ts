@@ -1,17 +1,20 @@
-import { registerTool } from '../registry.js';
+import { registerTool, listTools } from '../registry.js';
 
-// Grace authors a NEW tool for herself. The source is built AND run in the isolated
-// Docker sandbox first (scripts/sandbox-tool.mjs). If it passes and is pure-compute it
-// auto-promotes into the real toolset; if it touches files or the network it asks Mikkel
-// to confirm (call again with confirm:true). See docs/auto-develop.md. Requires Docker.
+// Risky tools that PASSED the sandbox and are awaiting Mikkel's explicit OK. A risky tool
+// only promotes on a genuine SECOND call (confirm:true) once it's already in this set — so the
+// model can't bypass the gate by just setting confirm:true on the first attempt.
+const pendingRisky = new Set<string>();
+
+// Grace authors (or updates) a tool for herself. Built + run in the Docker sandbox first;
+// pure-compute tools auto-promote, file/network tools wait for Mikkel's confirmation.
 registerTool({
   name: 'create_tool',
-  description: 'Create a NEW tool to extend your own capabilities. Give a snake_case name and the full TypeScript source of a tool file (it must `import { registerTool } from "../registry.js"` and call registerTool({ name, description, params, async run(args){...} })). It is built and test-run in an isolated Docker sandbox first. Pure-compute tools are added automatically; tools that touch files or the network are only added after Mikkel confirms (then call again with confirm:true). Optionally pass smoke_args to test-run it once.',
+  description: 'Create OR update a tool to extend your own capabilities. FIRST check your existing tools (listed above) — if one already does this, reuse or extend it instead of building a near-duplicate (e.g. don\'t add another dice/coin/random tool). Give a snake_case name and the full TypeScript source (it must `import { registerTool } from "../registry.js"` and call registerTool({ name, description, params, async run(args, ctx){...} }); to call another tool from inside, use `await ctx.callTool("web_search", { query })`). It is built and test-run in an isolated Docker sandbox first. Pure-compute tools are added automatically. Tools that touch files or the network are NOT added until Mikkel approves: you get needs_confirmation, then you ASK him and WAIT — only after he says yes do you call create_tool again with confirm:true. Requires Docker.',
   params: {
     name: { type: 'string', description: 'snake_case tool name, e.g. "roll_dice"', required: true },
-    source: { type: 'string', description: 'full TypeScript source of the tool file (imports registerTool from "../registry.js" and calls it)', required: true },
+    source: { type: 'string', description: 'full TypeScript source of the tool file', required: true },
     smoke_args: { type: 'string', description: 'optional JSON args to test-run the tool once in the sandbox, e.g. {"sides":6}' },
-    confirm: { type: 'boolean', description: 'set true ONLY after Mikkel approved adding a tool that touches files or the network' },
+    confirm: { type: 'boolean', description: 'ONLY set true after Mikkel approved (in a PREVIOUS turn) a file/network tool — never on the first attempt' },
   },
   async run(args) {
     const fs = await import('fs/promises');
@@ -25,27 +28,30 @@ registerTool({
     const source = String(args.source ?? '');
     if (!/registerTool\s*\(/.test(source)) return { error: 'source must import registerTool and call registerTool({...})' };
 
+    const isUpdate = listTools().some(t => t.name === name);
+
     const repoRoot = process.env.GRACE_REPO_ROOT
       ? path.resolve(process.env.GRACE_REPO_ROOT)
       : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
     const sandboxScript = path.join(repoRoot, 'scripts', 'sandbox-tool.mjs');
 
-    // Risk gate: does the tool touch the filesystem / processes / the network?
     const risky = /\b(fs|child_process|node:fs|node:child_process|net|http|https|dgram|fetch|spawn|exec|writeFile|unlink|process\.env|os\.homedir)\b/.test(source);
-    const promote = !risky || args.confirm === true;
+    const needsNet = /\b(fetch|http|https|web_search|news_fetcher|fetch_url|axios)\b/.test(source);
+
+    // Confirm gate: a risky tool promotes ONLY on a genuine second call (already surfaced + confirmed).
+    // Setting confirm:true on the first attempt is ignored (name not yet pending).
+    const promote = !risky || (args.confirm === true && pendingRisky.has(name));
 
     const tmp = path.join(os.tmpdir(), `grace-create-${name}-${Date.now()}.ts`);
     await fs.writeFile(tmp, source, 'utf-8');
 
     const runArgs = [sandboxScript, name, '--from', tmp];
     if (args.smoke_args) runArgs.push('--smoke', String(args.smoke_args));
+    if (needsNet) runArgs.push('--allow-net');   // so the smoke test can actually exercise the network
     if (promote) runArgs.push('--promote');
 
     const { code, out } = await new Promise<{ code: number; out: string }>((resolve) => {
-      const ps = spawn(process.execPath, runArgs, {
-        cwd: repoRoot,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      });
+      const ps = spawn(process.execPath, runArgs, { cwd: repoRoot, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
       let buf = '';
       ps.stdout.on('data', (d) => { buf += d.toString(); });
       ps.stderr.on('data', (d) => { buf += d.toString(); });
@@ -66,15 +72,20 @@ registerTool({
       };
     }
     if (!promote) {
+      pendingRisky.add(name);   // now eligible to be confirmed on a later turn
       return {
         ok: true, promoted: false, needs_confirmation: true,
         reason: 'this tool touches files or the network',
-        message: `'${name}' passed the sandbox, but it touches files or the network so I won't add it without your OK. Say yes and I'll add it (confirm:true).`,
+        message: `'${name}' passed the sandbox, but it touches files or the network. STOP and ASK Mikkel to approve it — do NOT retry now. Only after he says yes, call create_tool again with confirm:true.`,
       };
     }
+    pendingRisky.delete(name);
     if (code !== 0) {
       return { ok: true, promoted: false, error: 'passed the sandbox but failed to promote into the real tree: ' + out.slice(-400) };
     }
-    return { ok: true, promoted: true, tool: name, message: `'${name}' passed the sandbox and is now in my toolset (active after the next restart).` };
+    return {
+      ok: true, promoted: true, tool: name, updated: isUpdate,
+      message: `'${name}' passed the sandbox and is now ${isUpdate ? 'updated' : 'added'} in my toolset (active after the next restart).`,
+    };
   },
 });

@@ -59,7 +59,8 @@ console.log('SANDBOX_RESULT ' + JSON.stringify(verdict));  // machine-readable l
 if (verdict.ok && flag('--promote')) {
   console.log('[sandbox] ✓ passed in sandbox → promoting to the real tree…');
   const smokePart = smoke ? ['--smoke', smoke] : [];
-  const p = spawnSync('node', ['scripts/scaffold-tool.mjs', 'add', name, '--from', path.resolve(from), ...smokePart], { cwd: ROOT, stdio: 'inherit' });
+  // --force so a sandbox-validated UPDATE can overwrite an existing tool of the same name.
+  const p = spawnSync('node', ['scripts/scaffold-tool.mjs', 'add', name, '--from', path.resolve(from), '--force', ...smokePart], { cwd: ROOT, stdio: 'inherit' });
   process.exit(p.status ?? 0);
 }
 process.exit(verdict.ok ? 0 : 1);

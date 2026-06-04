@@ -8,14 +8,31 @@
 // OllamaLLM detects it, runs the tool, then asks the model to answer with the result.
 // ─────────────────────────────────────────────
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+/** Passed to every tool's run() so a tool can call OTHER tools (e.g. news_fetcher → web_search). */
+export interface ToolContext { callTool: (name: string, args?: Record<string, any>) => Promise<unknown>; }
+
 export interface ToolSpec {
   name: string;
   description: string;
   params: Record<string, { type: string; description: string; required?: boolean }>;
-  run(args: Record<string, any>): Promise<unknown>;
+  run(args: Record<string, any>, ctx?: ToolContext): Promise<unknown>;
 }
 
 const tools = new Map<string, ToolSpec>();
+
+// Grace's own source tree ("her brain"). Mutating tools refuse to edit these — changes to her own
+// code/tools must go through create_tool (sandbox-validated), not raw edit_file/write_file.
+const REPO_ROOT = process.env.GRACE_REPO_ROOT
+  ? path.resolve(process.env.GRACE_REPO_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+export function isGraceOwnSource(p: string): boolean {
+  const rel = path.relative(REPO_ROOT, path.resolve(p));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  return ['packages', 'sandbox', 'scripts', 'shared'].includes(rel.split(path.sep)[0]);
+}
 
 export function registerTool(t: ToolSpec): void { tools.set(t.name, t); }
 export function listTools(): ToolSpec[] { return [...tools.values()]; }
@@ -93,7 +110,7 @@ export function parseToolCall(text: string): ToolInvocation | null {
 export async function runTool(name: string, args: Record<string, any>): Promise<unknown> {
   const t = tools.get(name);
   if (!t) return { error: `Unknown tool: ${name}` };
-  try { return await t.run(args ?? {}); }
+  try { return await t.run(args ?? {}, { callTool: (n, a) => runTool(n, a ?? {}) }); }
   catch (e) { return { error: String(e) }; }
 }
 

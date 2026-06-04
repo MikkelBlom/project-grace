@@ -1,11 +1,27 @@
 # Grace — Known Issues (live voice test, 2026-06-04)
 
 Prioritized with root cause + fix direction. Evidence = the 13:29–14:06 session on
-`feat/reliability-and-batch-tools`. Fix next session.
+`feat/reliability-and-batch-tools`. **All P0/P1 fixed 2026-06-04 (round 2); P2 addressed.**
 
-> Note: during the test Grace self-authored 3 tools that are now UNTRACKED in the working
-> tree: `roll_dice.ts` (good), `get_current_time.ts` (ok), `news_fetcher.ts` (**broken** — see P1c).
-> Triage these before committing the branch. `index.ts` is also modified by her promotes.
+> Update: the 3 self-authored tools are kept and committed — `roll_dice` (now supports `sides`),
+> `get_current_time`, and `news_fetcher` (**fixed** to use `ctx.callTool`).
+
+## ✅ Fixed (2026-06-04, round 2) — verified headless except P0 (needs live test)
+
+- **P0 task loop:** task mode forbids `task_status`/`start_background_task` (hard corrective), runs only
+  real tools, and a *did-real-work* guard means she can't claim "done" without acting — if nothing ran
+  she says so honestly. (`OllamaLLM.ts runBackgroundTask`) — **re-test live.**
+- **P1a confirm gate:** `confirm:true` is ignored unless the tool was already surfaced for approval
+  (`pendingRisky` set); first-call promotion of file/network tools is blocked. ✅ verified.
+- **P1b dedup:** create_tool description + personality rule tell her to check existing tools first.
+- **P1c inter-tool calls:** every `run(args, ctx)` gets `ctx.callTool`; `news_fetcher` rewritten to use it. ✅
+- **P1d update:** create_tool/sandbox `--force` on promote → a sandbox-validated tool can be updated. ✅
+- **P2:** write/edit/move/delete refuse Grace's own source (`packages|sandbox|scripts|shared`) → use
+  create_tool. Added `create_folder`; write_file auto-creates parents. ✅
+
+Residual (acceptable, revisit if seen): a model could surface+confirm a risky tool in the SAME turn
+(STOP message + pending-set make it unlikely); a real-build failure after a sandbox-passed UPDATE could
+lose the old tool (sandbox parity makes this rare).
 
 ---
 

@@ -1,4 +1,4 @@
-import { registerTool } from '../registry.js';
+import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Delete a local file (gated to the user's home folder for safety).
 registerTool({
@@ -16,6 +16,7 @@ registerTool({
     if (!raw) throw new Error('path is required');
     const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
     if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be deleted.` };
+    if (isGraceOwnSource(p)) return { error: `Refused: ${p} is part of Grace's own source code — manage your own tools via create_tool, not raw delete_file.` };
     try {
       const stats = await fs.stat(p);
       if (stats.isDirectory()) return { error: `Refused: ${p} is a directory. delete_file can only delete files.` };

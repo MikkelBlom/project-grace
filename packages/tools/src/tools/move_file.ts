@@ -1,4 +1,4 @@
-import { registerTool } from '../registry.js';
+import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Move / rename a file (so Grace relocates files instead of re-creating them).
 registerTool({
@@ -18,6 +18,7 @@ registerTool({
     let to = underHome(args.to);
     if (!from || !to) return { error: 'both from and to are required' };
     if (!from.startsWith(home) || !to.startsWith(home)) return { error: 'Both paths must be under the home folder.' };
+    if (isGraceOwnSource(from) || isGraceOwnSource(to)) return { error: "Refused: that path is part of Grace's own source code — manage your own tools via create_tool, not raw move_file." };
     try {
       try { const st = await fs.stat(to); if (st.isDirectory()) to = path.join(to, path.basename(from)); } catch { /* to does not exist yet */ }
       await fs.mkdir(path.dirname(to), { recursive: true });

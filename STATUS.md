@@ -4,7 +4,7 @@ _Updated: 2026-06-04 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
 
 > Backlog + guides: **ROADMAP.md**, **docs/architecture.md**, **docs/adding-tools.md**,
 > **docs/working-with-other-ai.md**, **docs/implement-prompt.md** (paste-in agent prompt).
-> ⚠️ **docs/known-issues.md** — live-test bugs to fix next (P0: background tasks do nothing but poll).
+> **docs/known-issues.md** — live-test bugs P0+P1 FIXED 2026-06-04 (re-test the branch; P0 needs a live run).
 
 ## Working & verified ✅
 - GPU I/O loop: Whisper large-v3 (lang `auto`) → gemma4:26b (think:false) → Kokoro `af_heart`.

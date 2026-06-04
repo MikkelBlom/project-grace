@@ -1,0 +1,2 @@
+import { registerTool } from '../registry.js';
+registerTool({ name:'roll_dice', description:'Roll an N-sided die (default 6).', params:{ sides:{ type:'number', description:'sides' } }, async run(args){ const s=Number(args.sides)>0?Math.floor(Number(args.sides)):6; return { sides:s, roll:1+Math.floor(Math.random()*s) }; } });

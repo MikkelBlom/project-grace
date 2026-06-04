@@ -1,4 +1,4 @@
-import { registerTool } from '../registry.js';
+import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Versatile tool to edit files surgically.
 registerTool({
@@ -24,6 +24,7 @@ registerTool({
     const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
     
     if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be edited.` };
+    if (isGraceOwnSource(p)) return { error: `Refused: ${p} is part of Grace's own source code — change your own tools/code via create_tool (sandbox-validated), not raw edit_file.` };
     
     let text: string;
     try { text = await fs.readFile(p, 'utf-8'); } catch (e) { return { error: String(e) }; }

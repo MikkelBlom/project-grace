@@ -10,7 +10,7 @@ export interface ToolSpec {
   name: string;                 // snake_case, what the model calls
   description: string;          // tells the model WHEN/HOW to use it — be precise
   params: Record<string, { type: string; description: string; required?: boolean }>;
-  run(args: Record<string, any>): Promise<unknown>;   // returns JSON-serializable data
+  run(args: Record<string, any>, ctx?: ToolContext): Promise<unknown>;   // ctx.callTool(name,args) → call another tool
 }
 ```
 
@@ -45,6 +45,15 @@ import './tools/your_tool.js';
 
 That's it — `describeTools()` now lists it in the system prompt, and the multi-step loop +
 autonomous tasks can call it. No other wiring.
+
+### Calling another tool (composition)
+`run(args, ctx)` receives a `ctx` whose `callTool` runs any other tool — so a tool can build on others:
+```ts
+async run(args, ctx) {
+  const res: any = await ctx.callTool('web_search', { query: 'AI security' });
+  return { headlines: (res.results ?? []).map((r: any) => r.title) };
+}
+```
 
 ## 4. Rules that matter
 - **Description is everything** — the model decides from it. Say when to use it and how args map.
