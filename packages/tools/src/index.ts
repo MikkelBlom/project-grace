@@ -42,3 +42,4 @@ import './tools/word_counter.js';
 import './tools/temperature_converter.js';
 import './tools/date_difference_calculator.js';
 import './tools/mission_log_updater.js';
+import './tools/phase_3_consolidation.js';
