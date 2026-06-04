@@ -20,7 +20,16 @@ import type { GraceConfig, GraceMode, GracePowerState, ConversationTurn } from '
 // no asking. (Less explicit hints are handled semantically by the LLM via enter_listen_mode,
 // which asks Mikkel to confirm first.)
 const LISTEN_START_RE = /(let me explain|let me think out loud|hold on,? let me|don'?t interrupt|don'?t respond yet|listen up|hear me out|just listen|lad mig forklare|lad mig (snakke|tale|tænke) (ud|færdig|højt)|lad mig tale ud|hør (her|efter)|lytte? efter|slå (dine )?lyttelapper(ne)? ud|du skal (bare |lige )?lytte|bare lyt|lyt(te)?[- ]?mode|lyt (nu|lige)|afbryd mig ikke|jeg (skal|vil) (lige )?forklare)/i;
-const LISTEN_END_RE = /(i'?m done|that'?s it|that'?s all|i'?m finished|over to you|your turn|go ahead now|jeg er færdig|det var det|det var alt|din tur|værsgo|så er jeg færdig|nu kan du svare|nu er det din tur|okay,? kør|så kør|kør nu|gå i gang|kom i gang|du kan (godt )?(svare|starte|gå i gang)|nu må du (gerne)?)/i;
+// Releasing listen mode is STT-fragile: Whisper hears "gå i gang" as "god i gang", "go i gang",
+// even "I O I gang" — so we match the strong token "i gang" regardless of the verb, plus other
+// explicit "go/done" phrases. STRONG_END matches at any length; SHORT_GO only on short, command-like
+// utterances (so an "i gang"/"start" buried in a long explanation sentence doesn't end it early).
+const LISTEN_END_STRONG_RE = /(i'?m done|that'?s it|that'?s all|i'?m finished|over to you|your turn|go ahead|jeg er færdig|så er jeg færdig|det var det|det var alt|din tur|nu er det din tur|nu kan du svare|værsgo|du må gerne (begynd|gå|start|kør)|du kan (godt )?(svare|starte|gå i gang|begynd))/i;
+const LISTEN_END_SHORT_RE = /(\bi gang\b|(g[åo]+d?|go) i gang|kom i gang|sæt i gang|\bstart\b|start( nu| opgaven| missionen)?|\bbegynd(e)?\b|\bkør\b|go ahead|^\s*(gå|go)\s*[.!]?\s*$|\bbegin\b)/i;
+function isListenEnd(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  return LISTEN_END_STRONG_RE.test(lower) || (lower.length <= 32 && LISTEN_END_SHORT_RE.test(lower));
+}
 
 // Voice control fast-path — short, command-like utterances that map straight to control:*
 // events, so Mikkel can stop/pause/resume/ask for status by voice even while a mission runs
@@ -91,17 +100,29 @@ export class GraceCore {
       // ── Hold-the-floor / listen mode ──────────
       const lower = utterance.trim().toLowerCase();
       if (this.listenMode) {
-        if (LISTEN_END_RE.test(lower)) {
+        if (isListenEnd(utterance)) {
           // Combine everything buffered (minus the closing phrase) and dispatch as one turn.
           utterance = this.exitListenMode(false, utterance.trim());
           console.log(`[Core] 🎧 listen mode OFF — processing ${utterance.length} chars`);
           if (!utterance) { bus.emit('overlay:show', { type: 'listening' }); return; }
           // fall through to normal dispatch with the combined text
         } else {
-          this.listenBuffer.push(utterance.trim());
-          console.log(`[Core] 🎧 holding (${this.listenBuffer.length} parts): "${utterance.trim().slice(0, 60)}"`);
-          bus.emit('overlay:show', { type: 'listening' });
-          return; // stay silent, keep listening across the pause
+          const cur = utterance.trim();
+          this.listenBuffer.push(cur);
+          const n = this.listenBuffer.length;
+          // Safety net: a short phrase repeated back-to-back means Mikkel is trying to end listen
+          // mode but STT isn't matching the end phrase — release rather than leave him stuck.
+          if (n >= 2 && cur.length <= 20 && cur.toLowerCase() === this.listenBuffer[n - 2]!.trim().toLowerCase()) {
+            this.listenBuffer.splice(n - 2, 2);            // drop both repeats (the failed end signal)
+            utterance = this.exitListenMode(false);        // dispatch everything said before them
+            console.log('[Core] 🎧 listen mode OFF — released on a repeated phrase');
+            if (!utterance) { bus.emit('overlay:show', { type: 'listening' }); return; }
+            // fall through to normal dispatch with the combined text
+          } else {
+            console.log(`[Core] 🎧 holding (${n} parts): "${cur.slice(0, 60)}"`);
+            bus.emit('overlay:show', { type: 'listening' });
+            return; // stay silent, keep listening across the pause
+          }
         }
       } else if (LISTEN_START_RE.test(lower)) {
         this.enterListenMode(sessionId);
