@@ -41,6 +41,10 @@ export class GraceCore {
   private listenBuffer: string[] = [];
   private memory = new GraceMemory();
   private sessionId = `sess-${Date.now()}`;
+  // Voice barge-in: keep the mic OPEN while Grace speaks so a spoken "stop" lands mid-sentence.
+  // Safe when output is in-ear (earbuds) + mic is the laptop's — on laptop SPEAKERS this would
+  // feed her own voice back, so it's opt-in. Enable with GRACE_VOICE_BARGEIN=1.
+  private bargeIn = process.env.GRACE_VOICE_BARGEIN === '1' || process.env.GRACE_VOICE_BARGEIN === 'true';
 
   constructor(config: GraceConfig) {
     this.config = config;
@@ -160,7 +164,10 @@ export class GraceCore {
 
     // ── TTS state tracking ────────────────────
     bus.on('tts:speaking', () => {
-      bus.emit('stt:pause', {});
+      // Normally pause the mic so Grace doesn't transcribe herself. With voice barge-in on,
+      // keep it open so a spoken "stop"/"pause" reaches the control fast-path mid-speech;
+      // ordinary speech during her turn is still ignored by the isProcessing guard.
+      if (!this.bargeIn) bus.emit('stt:pause', {});
     });
 
     bus.on('tts:done', () => {
