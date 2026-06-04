@@ -257,7 +257,7 @@ export class OllamaLLM {
           console.log(`[OllamaLLM]    ↳ ${Date.now() - started}ms · ${JSON.stringify(result).slice(0, 160)}`);
 
           const resultJson = JSON.stringify(result);
-          lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 700)}`;
+          lastToolNote = `${call.tool}(${JSON.stringify(call.args)}) → ${resultJson.slice(0, 128000)}`;
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content:
             `TOOL RESULT (${call.tool}): ${resultJson}\n` +
@@ -321,7 +321,7 @@ export class OllamaLLM {
         stream: false,
         think: false,
         format: 'json',
-        options: { temperature: 0.5, top_p: 0.9, num_ctx: 32768, num_predict: 1024 },
+        options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 1024 },
       }),
       signal: AbortSignal.timeout(180_000),
     });
@@ -396,7 +396,7 @@ export class OllamaLLM {
         
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content:
-          `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 1800)}\n` +
+          `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 128000)}\n` +
           `Keep going until the task is fully done AND verified, then finish by setting "done": true and putting your summary in "speak".` });
       }
       if (!result.trim()) {
@@ -440,8 +440,8 @@ export class OllamaLLM {
       options: {
         temperature: 0.7,
         top_p: 0.9,
-        num_ctx: 32768,       // Gemma 4 understøtter op til 128K — 32K er godt til daglig brug
-        num_predict: 2048,    // Max output tokens
+        num_ctx: 131072,      // Gemma 4 understøtter op til 256K — 128K giver god plads til store kodefiler
+        num_predict: 4096,    // Max output tokens (øget til lange svar)
       },
       format: 'json',
     });
