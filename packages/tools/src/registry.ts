@@ -131,10 +131,14 @@ export interface TaskState {
 }
 class TaskRegistryImpl {
   current: TaskState | null = null;
+  cancelRequested = false;
   start(description: string): TaskState {
+    this.cancelRequested = false;
     this.current = { id: 'task-' + Date.now(), description, phase: 'planning', log: [], done: false, startedAt: Date.now() };
     return this.current;
   }
+  /** Ask the running task to stop at its next step. Returns false if nothing is running. */
+  requestCancel(): boolean { if (this.current && !this.current.done) { this.cancelRequested = true; return true; } return false; }
   update(phase: string): void { if (this.current && !this.current.done) this.current.phase = phase; }
   log(line: string): void { if (this.current) { this.current.log.push(line); if (this.current.log.length > 25) this.current.log.shift(); } }
   finish(result: string): void { if (this.current) { this.current.result = result; this.current.done = true; this.current.phase = 'done'; } }

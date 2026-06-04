@@ -102,6 +102,10 @@ const SKIP_RE = /^[\s.<>*"'`]*skip[\s.<>*"'`]*$/i;
 // Tools that change the filesystem — after one runs, Grace must verify before claiming success.
 const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'move_file', 'delete_file']);
 
+// "let me check…", "I'll open…", "jeg vil finde…" — intent narration with an action verb. When the
+// model emits this with NO tool call, nudge it to actually act (or admit it can't) instead of stalling.
+const INTENT_RE = /\b(let me|i'?ll|i will|i am going to|i'?m going to|lad mig|jeg vil(?: gerne)?|jeg skal)\b[^.?!]{0,40}\b(check|look|see|find|grab|open|read|search|create|make|build|get|take|do|fix|update|write|pull|dig|inspect|verify|run|tjekke?|se|finde|kigge?|åbne?|læse?|lave|hente|opdatere?|køre|søge)\b/i;
+
 // Real machine facts injected into the prompt so Grace stops guessing paths / usernames.
 function describeEnvironment(): string {
   let home = '', user = '';
@@ -249,6 +253,7 @@ export class OllamaLLM {
         const MAX_STEPS = 8;   // cap, not a target — she stops early when done; tokens are free (local)
         let allSpoken: string[] = [];
         let lastToolNote = '';
+        let narrationNudged = false;
 
         for (let step = 0; step < MAX_STEPS; step++) {
           const reply = await this.complete(work);
@@ -262,16 +267,29 @@ export class OllamaLLM {
           }
 
           if (call.calls.length === 0) {
-            // No tool → her final answer; speak it. Intermediate tool-step "On it…"
-            // narration is intentionally NOT accumulated — speaking it only at the end
-            // mashed the goal and the answer into one clip after the silent work.
-            if (call.speak && call.speak.trim()) allSpoken.push(call.speak.trim());
+            const spoke = call.speak?.trim() || '';
+            // Narrated intent but called no tool ("let me check…") — nudge her to act, once.
+            if (!narrationNudged && INTENT_RE.test(spoke)) {
+              narrationNudged = true;
+              work.push({ role: 'assistant', content: reply });
+              work.push({ role: 'user', content:
+                'You said you would do something but called no tool. If a tool can do it, output the tool call NOW. ' +
+                'If no tool can, tell Mikkel plainly you cannot — do not just narrate intent.' });
+              continue;
+            }
+            // Otherwise this is her final answer for the turn.
+            if (spoke) allSpoken.push(spoke);
             break;
           }
 
           // Background task is special: fire it and return (don't batch it with reads).
           const bg = call.calls.find(c => c.tool === 'start_background_task');
           if (bg) {
+            if (TaskRegistry.isRunning()) {
+              work.push({ role: 'assistant', content: reply });
+              work.push({ role: 'user', content: 'A background task is already running — do NOT start another. Answer Mikkel directly, call task_status for progress, or cancel_task to stop it.' });
+              continue;
+            }
             const desc = String((bg.args as Record<string, unknown>)?.description || text);
             void this.runBackgroundTask(desc);
             allSpoken.push(call.speak?.trim() || "On it — I'll dig into that on my own and let you know when I'm done.");
@@ -382,7 +400,8 @@ export class OllamaLLM {
       `You are NOT delegating and nothing runs in the background — YOU do every step. ` +
       `Do NOT call start_background_task or task_status; they do nothing here. ` +
       `Use real tools: write_file (it creates parent folders automatically), create_folder, list_dir, read_file, edit_file, move_file. ` +
-      `Take ONE concrete action per reply; after a change, verify it with read_file/list_dir. ` +
+      `When you must do the SAME kind of step many times (e.g. create 15 files), batch several into ONE reply via the "tools" array — far faster than one per turn. ` +
+      `After a change, verify it with read_file/list_dir. ` +
       `Only when the work is truly done AND verified, reply with "done": true and a concise summary in "speak".`;
     try {
       TaskRegistry.update('planning');
@@ -399,9 +418,15 @@ export class OllamaLLM {
       let result = '';
       let didRealWork = false;            // did any REAL tool (not status/delegation) actually run?
       let rejectedEmptyDone = false;
-      const META = new Set(['start_background_task', 'task_status']);  // meaningless inside a task
+      const META = new Set(['start_background_task', 'task_status', 'cancel_task']);  // meaningless inside a task
       const MAX = 24;   // deeper autonomous tasks are fine — local, no token cost
       for (let step = 0; step < MAX; step++) {
+        if (TaskRegistry.cancelRequested) {
+          console.warn('[Task] ⏹ cancelled by Mikkel');
+          TaskRegistry.fail('cancelled by Mikkel');
+          announce("Okay, I've stopped that task.");
+          return;
+        }
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
         console.log(`[Task] 🧠 Raw reply:\n${reply}`);
@@ -430,7 +455,8 @@ export class OllamaLLM {
           const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 128000)}`).join('\n');
           const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
             ? 'You changed something — now VERIFY with read_file/list_dir before finishing. ' : '';
-          work.push({ role: 'assistant', content: reply });
+          // Compact record (don't echo big file contents back into context — it bloats + slows later steps).
+          work.push({ role: 'assistant', content: JSON.stringify({ thought: (call.thought || '').slice(0, 300), did: realCalls.map(c => c.tool), done: call.done }) });
           work.push({ role: 'user', content:
             `${combined}\n${verify}` +
             `Continue with the next concrete step, or set "done": true (summary in "speak") once everything is actually done and verified.` });

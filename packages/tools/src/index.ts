@@ -30,6 +30,7 @@ import './tools/open_browser.js';
 import './tools/open_path.js';
 import './tools/clipboard.js';
 import './tools/task_control.js';
+import './tools/cancel_task.js';
 import './tools/get_current_time.js';
 import './tools/roll_dice.js';
 import './tools/news_fetcher.js';
