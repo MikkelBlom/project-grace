@@ -43,8 +43,39 @@ _Updated: 2026-06-04 · RTX 5090 Laptop (24 GB), Win 11 · git: main_
   host filesystem / no network — verified a malicious tool can't escape to `C:\Users\mikke`. See
   `docs/auto-develop.md`.
 
+## In review — `feat/autonomous-self-dev` (built + headless-tested; needs Mikkel's live voice test)
+Branches off `feat/reliability-and-batch-tools`. The sprint to make Grace ready to develop
+herself in a loop, and to make her interruptible.
+- **Hot reload** — `create_tool` now dynamic-imports the freshly-built `dist/tools/<name>.js`
+  after a successful promote, so a self-built tool is **live the same turn, no restart**. The
+  system-prompt tool catalog is rebuilt every turn (`currentSystemPrompt()`), so she actually
+  knows the new tool exists. Safeguards unchanged (pure-compute auto, file/network gated).
+  *Verified headless* (scaffold a tool in a child process → live in another process' registry).
+- **Autonomous mission driver** — new `start_mission` tool + `runMission`: she plans a backlog
+  (`planBacklog`, may web_search), then builds through it one item at a time (`buildOneTool` →
+  `create_tool`, with sandbox-fix retries). Each item is its own bounded sub-task, so a per-item
+  step cap never ends the mission — **this is what stops her falling back to listening at the cap.**
+  Tallies built / pending-approval / failed; risky tools that pass the sandbox are recorded as
+  "pending your approval" (not promoted unattended). Planning JSON shape verified vs live Ollama.
+- **Barge-in / interrupt** — global hotkeys: **Ctrl+Shift+S** stop everything, **Ctrl+Shift+Space**
+  pause/resume, **Ctrl+Shift+.** spoken status, **Ctrl+Shift+H** toggle listen mode. TTS is now
+  killable mid-sentence (spawned child, SIGTERM + queue flush); in-flight generation aborts via
+  AbortController. Voice fast-path: short "stop/pause/fortsæt/status" map to control events even
+  mid-work. Optional **GRACE_VOICE_BARGEIN=1** keeps the mic open during her speech (safe with
+  earbud output + laptop mic — recommended for Mikkel's setup).
+- **Listen mode fixed + semantic** — the old phrase list never matched "lytte efter" (the bug).
+  Widened phrases (incl. "slå lyttelapperne ud"); plus a semantic path: `enter_listen_mode` lets
+  her decide to hold the floor and **ask first** ("Vil du have jeg bare lytter, til du er klar?").
+
+> **Live-test focus for this branch:** (1) say the big objective → she calls start_mission, plans,
+> and builds 20+ tools in a loop without stopping at a cap; (2) interrupt her by hotkey AND by voice
+> while she works/speaks; (3) "lytte efter" / "slå lyttelapperne ud" enters listen mode, and a vague
+> hint makes her ASK first; (4) a hot-loaded tool is callable in the same session. Needs Docker + 26b.
+
 ## Optional / opt-in
 - `GRACE_TTS_PLAYBACK="server"` — persistent stereo audio player (smoother over BT); off by default.
+- `GRACE_VOICE_BARGEIN=1` — keep mic open during Grace's speech so a spoken "stop" interrupts her
+  mid-sentence. Only safe with in-ear output (earbuds) + a separate mic; off by default.
 
 ## Next (see ROADMAP.md)
 1. **Live-test + merge** `feat/reliability-and-batch-tools` (voice session: real paths, batched

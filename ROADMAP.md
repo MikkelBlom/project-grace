@@ -53,7 +53,14 @@ for info (weather/web) the way any assistant does.
 ### P2 — Autonomy & agency
 - **Scheduled / recurring tasks** (e.g. "every morning summarise my calendar"): a real job queue.
   Original vision = Redis + BullMQ; lighter local option = a JSON-backed scheduler + setInterval.
-- **Barge-in / interruption:** let the user talk over Grace; pause TTS, capture, resume or redirect.
+- ✅ **Barge-in / interruption** (`feat/autonomous-self-dev`): stop/pause/status hotkeys, killable
+  TTS, abortable generation, voice control fast-path, opt-in mic-open-during-speech. Live-test pending.
+- ✅ **Autonomous mission** (`feat/autonomous-self-dev`): `start_mission` plans a backlog and works
+  through it item-by-item, surviving per-item step caps (no more stopping at the cap). Live-test pending.
+- **Silent / text input mode** *(requested by Mikkel — future):* a way to TYPE to Grace instead of
+  speaking, for when voice is awkward or he wants to paste a long/complex prompt. Likely a small text
+  box in the overlay (or a global hotkey to focus one) that feeds straight into `stt:heard`/`llm:thinking`,
+  bypassing Whisper. Pairs naturally with listen mode. Not built yet.
 - **Better planning:** for big tasks, an explicit plan object with checkable steps + progress %.
 
 ### P3 — STT accuracy
@@ -71,6 +78,10 @@ for info (weather/web) the way any assistant does.
 - **Grace writes her own tools:** generate a tool definition → test it in the sandbox →
   `auto_git_commit` → hot-load into `@grace/tools`. Build on the existing tool framework +
   the autonomous task loop + a Docker sandbox.
+- ✅ **Hot-load** done (`feat/autonomous-self-dev`): a promoted tool is live the same turn, no
+  restart. ✅ **Mission loop** done: builds through a backlog autonomously.
+- Remaining: `auto_git_commit` after a tool goes green (so a multi-hour run leaves a clean,
+  committed trail instead of a pile of uncommitted dist/src changes).
 
 ### P6 — Remote access
 - WhatsApp (Meta Cloud API — heavier) or Telegram (trivial Bot API) bridge to talk to Grace remotely.

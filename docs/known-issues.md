@@ -6,6 +6,39 @@ Prioritized with root cause + fix direction. Evidence = the 13:29–14:06 sessio
 > Update: the 3 self-authored tools are kept and committed — `roll_dice` (now supports `sides`),
 > `get_current_time`, and `news_fetcher` (**fixed** to use `ctx.callTool`).
 
+## Round 5 — 2026-06-04 (self-development sprint; branch `feat/autonomous-self-dev`)
+
+Built to make Grace ready to develop her own tools in an unattended loop, and to make her
+interruptible. All headless-verified; the items below still need a live voice run.
+
+**Shipped (headless-verified):**
+- **Hot reload** — self-built tools go live the same turn (dynamic import of the built dist file
+  into the live registry; prompt tool-catalog rebuilt per turn). Proven: scaffold in a child
+  process → live in another process. **Removes the "active after restart" blocker.**
+- **Mission driver** — `start_mission` → plan a backlog → build each item as its own bounded
+  sub-task. Fixes the core "hits the cap and goes back to listening" problem: the per-item cap no
+  longer ends the run. Planning JSON shape verified against live Ollama (gemma4:e2b).
+- **Barge-in** — stop/pause/status hotkeys, killable TTS, abortable generation, voice control
+  fast-path, opt-in mic-open-during-speech (`GRACE_VOICE_BARGEIN`).
+- **Listen mode** — fixed the phrase bug ("lytte efter" never matched) + widened phrases +
+  semantic `enter_listen_mode` (she asks first when unsure).
+
+**Needs live test:**
+- A real mission run end-to-end (Docker + 26b): does she keep going for 20+ tools, do hot-loaded
+  tools become callable, are risky tools correctly parked as "pending approval"?
+- Interrupt feel: does hotkey-stop kill speech instantly mid-sentence? Does voice "stop" land
+  between mission steps? With `GRACE_VOICE_BARGEIN=1`, does it land mid-speech without feedback?
+- Listen mode: explicit phrase enters immediately; a vague hint makes her ASK first; END phrase
+  (or Ctrl+Shift+H) releases and she answers the whole buffered thing.
+
+**Known open / risk:**
+- Per-item builder is capped at 8 steps; a very complex tool needing many sandbox-fix cycles may
+  be marked failed. Acceptable — it moves on; revisit if many fail live.
+- Voice control fast-path is heuristic (anchored, ≤30 chars). A short utterance that happens to
+  start with "stop/pause/fortsæt/status" will trigger control. Tune phrases if it misfires.
+- Mission planning quality depends on the model; if the backlog is thin, the objective wording
+  needs to be more concrete (she'll say so rather than invent).
+
 ## Round 4 — 2026-06-04 (speed shelved, listen mode added)
 
 - **Task speed FIXED enough**: batching cut the 18-file task from 5.6 min → ~50s, 50 files → ~94s.
