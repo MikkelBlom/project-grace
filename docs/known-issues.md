@@ -6,6 +6,35 @@ Prioritized with root cause + fix direction. Evidence = the 13:29–14:06 sessio
 > Update: the 3 self-authored tools are kept and committed — `roll_dice` (now supports `sides`),
 > `get_current_time`, and `news_fetcher` (**fixed** to use `ctx.callTool`).
 
+## Round 3 — live test 2026-06-04 PM
+
+**Confirmed working live** ✅: P0 task loop actually did the work (created 18 files, verified, no
+fake-done); `create_folder`; `news_fetcher` via `ctx.callTool` (real headlines + topic filter);
+**dedup** — asked to "build a news tool" she recognized she already has `news_fetcher` and offered it
+instead of duplicating.
+
+**Fixed this round** (headless-verified; behavioural ones need a live run):
+- **Said-it-would-but-didn't** (narration without action) — main loop now nudges once when she narrates
+  intent ("let me check…") but calls no tool, forcing a real action or an honest "I can't". (`INTENT_RE`)
+- **No pause/stop** — new `cancel_task` tool + `TaskRegistry.cancelRequested`; the task loop checks it
+  each step and stops. "Grace, stop the task" now works.
+- **Tasks painfully slow** (18 files ≈ 5.6 min): the model re-emitted the full file content every step
+  AND it was echoed back into context. Task replies are now stored COMPACT, and taskSys tells her to
+  BATCH many similar ops into one reply (`tools[]`). Should cut big tasks from minutes toward seconds.
+- **Don't clobber a running task** — main loop refuses to start a 2nd background task while one runs.
+
+**Still open (next):**
+- **Latency** — each task step is still one LLM call (~10–15s); batching helps but per-call cost
+  remains. Consider a lighter/faster model for mechanical steps, or a real "for-each" primitive.
+- **Full barge-in / concurrency** — while a task runs, the main loop still answers in parallel, so two
+  voices interleave; `cancel_task` is the escape hatch but true pause/resume is ROADMAP P2.
+- **Comprehension** — the first split put the WHOLE list in every file: her own task description said
+  "same content as the original". Self-corrected when told. Better task-description discipline needed.
+- **Deferred cross-boundary actions** — "open a file when the task is done" (said in the main loop
+  while a task ran) was dropped; she needed reminding. No queue for post-task actions yet.
+- **news_fetcher quality** — returns mostly site homepages, not specific articles; could `fetch_url`
+  the top hit for a real snippet.
+
 ## ✅ Fixed (2026-06-04, round 2) — verified headless except P0 (needs live test)
 
 - **P0 task loop:** task mode forbids `task_status`/`start_background_task` (hard corrective), runs only
