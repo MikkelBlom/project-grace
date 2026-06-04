@@ -83,9 +83,29 @@ registerTool({
     if (code !== 0) {
       return { ok: true, promoted: false, error: 'passed the sandbox but failed to promote into the real tree: ' + out.slice(-400) };
     }
+
+    // ── Hot reload ────────────────────────────────────────────────────────
+    // The promote built packages/tools/dist/tools/<name>.js. Dynamically import
+    // it NOW so its registerTool() side-effect lands in the live registry singleton
+    // (the same Map OllamaLLM reads via describeTools/runTool) — no restart needed.
+    // A cache-busting query forces a fresh module eval so UPDATES take effect too.
+    let live = false;
+    let hotLoadError: string | undefined;
+    try {
+      const { pathToFileURL } = await import('url');
+      const distFile = path.join(repoRoot, 'packages', 'tools', 'dist', 'tools', `${name}.js`);
+      await import(`${pathToFileURL(distFile).href}?t=${Date.now()}`);
+      live = listTools().some(t => t.name === name);
+      if (!live) hotLoadError = 'imported but did not self-register';
+    } catch (e) {
+      hotLoadError = String(e);
+    }
+
     return {
-      ok: true, promoted: true, tool: name, updated: isUpdate,
-      message: `'${name}' passed the sandbox and is now ${isUpdate ? 'updated' : 'added'} in my toolset (active after the next restart).`,
+      ok: true, promoted: true, tool: name, updated: isUpdate, live,
+      message: live
+        ? `'${name}' passed the sandbox and is ${isUpdate ? 'updated' : 'added'} in my toolset — live RIGHT NOW, no restart needed. You can call it this turn.`
+        : `'${name}' passed the sandbox and is ${isUpdate ? 'updated' : 'added'} in my toolset, but hot-load failed (${hotLoadError}); it will be active after the next restart.`,
     };
   },
 });

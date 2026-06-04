@@ -138,7 +138,14 @@ function describeEnvironment(): string {
   ].join('\n');
 }
 
-const SYSTEM_PROMPT = [loadPersonality(), describeEnvironment(), describeTools()].filter(Boolean).join('\n\n');
+// Static identity + machine facts are computed once; the TOOL CATALOG is appended
+// fresh on every turn so hot-loaded tools (create_tool) appear immediately — without
+// this, a self-built tool would register in the live registry but never show up in the
+// prompt, so the model would never know to call it until a restart.
+const STATIC_PROMPT = [loadPersonality(), describeEnvironment()].filter(Boolean).join('\n\n');
+function currentSystemPrompt(): string {
+  return [STATIC_PROMPT, describeTools()].filter(Boolean).join('\n\n');
+}
 
 interface OllamaMessage {
   role: 'system' | 'user' | 'assistant';
@@ -396,7 +403,7 @@ export class OllamaLLM {
   }
 
   // ── Multi-step completion (non-streaming, system prompt + think:false) ──
-  private async complete(messages: Array<{ role: string; content: string }>, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
+  private async complete(messages: Array<{ role: string; content: string }>, systemPrompt: string = currentSystemPrompt()): Promise<string> {
     const norm = messages.map(m => ({
       role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
       content: m.content,
@@ -430,7 +437,7 @@ export class OllamaLLM {
       bus.emit('tts:speaking', { text, sessionId: sid });
     };
     // Task-mode system prompt: Grace IS the worker — she executes directly, herself.
-    const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are executing this task RIGHT NOW, yourself, one tool call at a time. ` +
+    const taskSys = `${currentSystemPrompt()}\n\nTASK MODE: You are executing this task RIGHT NOW, yourself, one tool call at a time. ` +
       `You are NOT delegating and nothing runs in the background — YOU do every step. ` +
       `Do NOT call start_background_task or task_status; they do nothing here. ` +
       `Use real tools: write_file, write_files (bulk — preferred for multiple files), create_folder, list_dir, read_file, edit_file, move_file. ` +
@@ -573,7 +580,7 @@ export class OllamaLLM {
     history: Array<{ role: string; content: string }> = [],
   ): Promise<{ text: string; tokens?: number }> {
     const messages: OllamaMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: currentSystemPrompt() },
       // Inject conversation history
       ...history.map(h => ({
         role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
@@ -624,7 +631,7 @@ export class OllamaLLM {
     history: Array<{ role: string; content: string }> = [],
   ): AsyncGenerator<string> {
     const messages: OllamaMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: currentSystemPrompt() },
       ...history.map(h => ({
         role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
         content: h.content,
