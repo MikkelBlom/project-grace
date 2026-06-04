@@ -23,25 +23,32 @@ registerTool({
     else if (!path.isAbsolute(root)) root = path.join(os.homedir(), root);
     const skip = new Set(['node_modules', '.git', 'AppData', '$Recycle.Bin', 'Windows', 'ProgramData', '.cache']);
     const hits: Array<{ path: string; type: 'file' | 'folder' }> = [];
-    const maxHits = 30, maxVisited = 20000;
+    const maxHits = 50, maxVisited = 20000;
     let visited = 0;
-    async function walk(dir: string, depth: number): Promise<void> {
-      if (hits.length >= maxHits || visited > maxVisited || depth > 6) return;
+    
+    const queue = [{ dir: root, depth: 0 }];
+    while (queue.length > 0 && hits.length < maxHits && visited < maxVisited) {
+      const current = queue.shift()!;
+      if (current.depth > 6) continue;
+      
       let entries: any[] = [];
-      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+      try { entries = await fs.readdir(current.dir, { withFileTypes: true }); } catch { continue; }
+      
       for (const e of entries) {
-        if (hits.length >= maxHits) return;
+        if (hits.length >= maxHits) break;
         visited++;
-        const full = path.join(dir, e.name);
+        const full = path.join(current.dir, e.name);
         const isDir = e.isDirectory();
+        
         // Empty query => list the top level (depth 0). Otherwise match files AND folders by name.
-        const match = q ? norm(e.name).includes(q) : depth === 0;
+        const match = q ? norm(e.name).includes(q) : current.depth === 0;
         if (match) hits.push({ path: full, type: isDir ? 'folder' : 'file' });
-        if (isDir && !skip.has(e.name) && !e.name.startsWith('.')) await walk(full, depth + 1);
+        
+        if (isDir && !skip.has(e.name) && !e.name.startsWith('.')) {
+          queue.push({ dir: full, depth: current.depth + 1 });
+        }
       }
     }
-    try { await walk(root, 0); }
-    catch (e) { return { root, error: String(e) }; }
     return { root, query: args.query ?? '', count: hits.length, matches: hits };
   },
 });
