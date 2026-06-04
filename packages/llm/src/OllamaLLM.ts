@@ -263,7 +263,7 @@ export class OllamaLLM {
             `If this is empty or an error, you MUST try again with a corrected query or a different tool (output a NEW tool JSON) — ` +
             `do not give up after one attempt. Danish folder names are English on disk: overførsler→Downloads, ` +
             `dokumenter→Documents, billeder→Pictures, skrivebord→Desktop. To go DEEPER into a folder, reuse the full ` +
-            `absolute 'path' from a match above as the 'root'. When you have the info, output a JSON with {"speak": "your answer", "tool": null}.` });
+            `absolute 'path' from a match above as the 'root'. When you have the info, finish by outputting a JSON with {"speak": "your answer", "tool": null}.` });
         }
         if (lastToolNote) this.lastToolContext = lastToolNote;
 
@@ -353,7 +353,7 @@ export class OllamaLLM {
       TaskRegistry.log('made a plan');
 
       const work: Array<{ role: string; content: string }> = [{ role: 'user',
-        content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. Final concise summary with NO JSON when truly done.\nTASK: ${description}\nYOUR PLAN:\n${plan}` }];
+        content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. When the task is truly done, output JSON with "tool": null and your summary in "speak".\nTASK: ${description}\nYOUR PLAN:\n${parsedPlan}` }];
 
       let result = '';
       const MAX = 14;
@@ -363,6 +363,7 @@ export class OllamaLLM {
         const call = parseToolCall(reply);
         
         if (!call) {
+          console.warn(`[Task] ⚠️ Invalid JSON reply from model: ${reply}`);
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content: 'You MUST output valid JSON matching the {"speak": "...", "tool": "...", "args": {...}} schema.' });
           continue;
