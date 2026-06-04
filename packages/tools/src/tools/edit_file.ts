@@ -3,13 +3,14 @@ import { registerTool } from '../registry.js';
 // Versatile tool to edit files surgically.
 registerTool({
   name: 'edit_file',
-  description: 'Make surgical edits to an existing text file. You can replace specific strings, insert text before/after a string, or modify specific line numbers. Use this instead of write_file when you only want to change a small part of a document.',
+  description: 'Make surgical edits to an existing text file. You can replace specific strings, insert text before/after a string, or modify specific line numbers. Use the "multi_replace" mode to pass an array of replacements to edit multiple parts of the file at once. Use this instead of write_file when you only want to change parts of a document.',
   params: {
     path: { type: 'string', description: 'absolute path of the file to edit', required: true },
-    mode: { type: 'string', description: 'one of: "replace_string", "insert_before_string", "insert_after_string", "insert_at_line", "replace_line", "delete_line"', required: true },
-    target_string: { type: 'string', description: 'the exact string to target (required for string modes)' },
+    mode: { type: 'string', description: 'one of: "replace_string", "multi_replace", "insert_before_string", "insert_after_string", "insert_at_line", "replace_line", "delete_line"', required: true },
+    target_string: { type: 'string', description: 'the exact string to target (required for string modes except multi_replace)' },
     line_number: { type: 'number', description: 'the 1-indexed line number to target (required for line modes)' },
-    content: { type: 'string', description: 'the new content to insert or replace with (required for all modes except delete_line)' },
+    content: { type: 'string', description: 'the new content to insert or replace with' },
+    replacements: { type: 'string', description: 'JSON array of objects with "target" and "content" fields (required ONLY for multi_replace mode). e.g. [{"target": "old", "content": "new"}]' },
     replace_all: { type: 'boolean', description: 'for "replace_string" mode, whether to replace all occurrences (default true)' },
   },
   async run(args) {
@@ -35,7 +36,23 @@ registerTool({
     let newText = text;
     let lines = text.split(/\r?\n/);
     
-    if (['replace_string', 'insert_before_string', 'insert_after_string'].includes(mode)) {
+    if (mode === 'multi_replace') {
+      let reps: Array<{target: string, content: string}> = [];
+      try {
+        reps = typeof args.replacements === 'string' ? JSON.parse(args.replacements) : args.replacements;
+      } catch (e) {
+        return { error: 'replacements must be a valid JSON array of objects' };
+      }
+      if (!Array.isArray(reps)) return { error: 'replacements must be an array' };
+      
+      for (const r of reps) {
+        if (!r.target) return { error: 'Each replacement must have a "target" string.' };
+        if (!newText.includes(r.target)) return { error: `Target string not found in file: ${r.target.substring(0,50)}...` };
+        const parts = newText.split(r.target);
+        newText = parts.join(r.content || '');
+      }
+    }
+    else if (['replace_string', 'insert_before_string', 'insert_after_string'].includes(mode)) {
       if (!target) return { error: 'target_string is required for string modes.' };
       if (!text.includes(target)) return { error: `target_string not found in file: ${target.substring(0,50)}...` };
       

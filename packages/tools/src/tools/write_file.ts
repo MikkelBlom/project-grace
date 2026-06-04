@@ -3,7 +3,7 @@ import { registerTool } from '../registry.js';
 // Create / write a text file (gated to the user's home folder for safety).
 registerTool({
   name: 'write_file',
-  description: 'Create or write a TEXT file on disk (notes, ideas, code). DANGER: By default this OVERWRITES the entire file, deleting existing content! Use mode="append" to add to the bottom, or mode="prepend" to add to the top.',
+  description: 'Write entirely new files or append/prepend to files. WARNING: DO NOT use this tool (mode="overwrite") to modify or clean up existing large text files or code files. You will struggle with JSON escaping and destroy the file. ALWAYS use the "edit_file" tool with "multi_replace" mode instead to modify existing files.',
   params: {
     path: { type: 'string', description: 'absolute path of the file to write (must be under the home folder)', required: true },
     content: { type: 'string', description: 'the text content to write', required: true },

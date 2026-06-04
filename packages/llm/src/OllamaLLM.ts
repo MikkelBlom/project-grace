@@ -339,10 +339,10 @@ export class OllamaLLM {
       bus.emit('llm:response', { text, sessionId: sid, model: this.model, spoken: true });
       bus.emit('tts:speaking', { text, sessionId: sid });
     };
-    // Task-mode system prompt: no <SKIP>, no chit-chat — execute and verify.
+    // Task-mode system prompt: no chit-chat — execute and verify.
     const taskSys = `${SYSTEM_PROMPT}\n\nTASK MODE: You are autonomously executing a task for Mikkel. ` +
-      `Work step by step with tools. NEVER set "speak" to <SKIP>. Do not chit-chat or ask questions. ALWAYS output ` +
-      `the JSON schema. When the task is fully done and verified, output JSON with "tool": null and your final concise summary in "speak".`;
+      `Work step by step with tools. Do not chit-chat or ask questions. ALWAYS output ` +
+      `the JSON schema. When the task is fully done and verified, output JSON with "done": true and your final concise summary in "speak".`;
     try {
       TaskRegistry.update('planning');
       const plan = await this.complete([{ role: 'user',
@@ -353,7 +353,7 @@ export class OllamaLLM {
       TaskRegistry.log('made a plan');
 
       const work: Array<{ role: string; content: string }> = [{ role: 'user',
-        content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. When the task is truly done, output JSON with "tool": null and your summary in "speak".\nTASK: ${description}\nYOUR PLAN:\n${parsedPlan}` }];
+        content: `Now execute this task step by step. After you think it's done, VERIFY the result actually satisfies it — if it looks wrong or incomplete, keep digging elsewhere. When the task is truly done, output JSON with "done": true and your summary in "speak".\nTASK: ${description}\nYOUR PLAN:\n${parsedPlan}` }];
 
       let result = '';
       const MAX = 14;
@@ -369,10 +369,18 @@ export class OllamaLLM {
           continue;
         }
 
-        if (!call.tool || call.tool === 'null' || call.tool === 'reply') {
+        if (call.done) {
            // Task done. The result is in call.speak.
            result = call.speak || 'Task finished without description.';
            break;
+        }
+
+        if (!call.tool || call.tool === 'null' || call.tool === 'reply') {
+           // She just spoke without a tool and without setting done:true.
+           // That's fine, it's just "thinking out loud".
+           work.push({ role: 'assistant', content: reply });
+           work.push({ role: 'user', content: 'What is your next step? Call a tool or set "done": true if finished.' });
+           continue;
         }
 
         if (call.tool === 'start_background_task') { // already in a task — don't recurse
@@ -387,10 +395,10 @@ export class OllamaLLM {
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content:
           `TOOL RESULT (${call.tool}): ${JSON.stringify(res).slice(0, 1800)}\n` +
-          `Keep going until the task is fully done AND verified, then finish by setting "tool": null and putting your summary in "speak".` });
+          `Keep going until the task is fully done AND verified, then finish by setting "done": true and putting your summary in "speak".` });
       }
       if (!result.trim()) {
-        const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"speak": "...", "tool": null}.' }], taskSys);
+        const fb = await this.complete([...work, { role: 'user', content: 'Summarise for Mikkel what you found or did. Output JSON with {"speak": "...", "done": true}.' }], taskSys);
         result = parseToolCall(fb)?.speak || fb;
       }
       console.log(`[Task] ✓ done in ${Math.round((Date.now() - t0) / 1000)}s`);
