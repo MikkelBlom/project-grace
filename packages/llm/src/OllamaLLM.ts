@@ -823,6 +823,7 @@ export class OllamaLLM {
       `Follow the steps in the OBJECTIVE exactly — if it asks you to write notes/analysis to files first, DO that using write_file before proposing the backlog (you may use any tools: write_file, web_search, fetch_url, list_dir, read_file). ` +
       `Then propose a backlog of CONCRETE, distinct, buildable tools, each with a clear single purpose. AVOID duplicating tools you already have (listed above). ` +
       `ORDER the backlog so the tools that need NO input from Mikkel come FIRST (pure-compute / read-only that auto-promote), and tools needing his involvement (OAuth, API keys, secrets, accounts) come LAST. ` +
+      `You do NOT need a tool for logging mission progress — that is handled automatically — so do not put one on the backlog. ` +
       `When ready, reply with JSON: ` +
       `{"thought":"...","tool":null,"done":true,"backlog":[{"name":"snake_case_name","purpose":"one concise line"}, ...]}. ` +
       `Aim for a generous list if the objective implies many (e.g. 20+).`;

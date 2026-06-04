@@ -46,7 +46,13 @@ registerTool({
     await fs.writeFile(tmp, source, 'utf-8');
 
     const runArgs = [sandboxScript, name, '--from', tmp];
-    if (args.smoke_args) runArgs.push('--smoke', String(args.smoke_args));
+    // smoke_args may arrive as a JSON string OR as an object (the model often emits an object).
+    // String(obj) would give "[object Object]" → the sandbox's JSON.parse then fails and wastes
+    // retries, so stringify objects properly here.
+    if (args.smoke_args != null && args.smoke_args !== '') {
+      const smoke = typeof args.smoke_args === 'string' ? args.smoke_args : JSON.stringify(args.smoke_args);
+      runArgs.push('--smoke', smoke);
+    }
     if (needsNet) runArgs.push('--allow-net');   // so the smoke test can actually exercise the network
     if (promote) runArgs.push('--promote');
 
