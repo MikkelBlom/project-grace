@@ -45,3 +45,4 @@ import './tools/mission_log_updater.js';
 import './tools/phase_3_consolidation.js';
 import './tools/summarize_and_extract.js';
 import './tools/organize_files_by_extension.js';
+import './tools/develop_api_integration_stubs.js';
