@@ -371,7 +371,10 @@ export class OllamaLLM {
               work.push({ role: 'user', content: 'Something is already running — do NOT start a mission now. Tell Mikkel what is running, or stop it first.' });
               continue;
             }
-            const obj = String((mission.args as Record<string, unknown>)?.objective || text);
+            // Keep whichever is more complete — the user's full brief (text, e.g. a long
+            // listen-mode dump) or the model's objective arg — so no phase detail is lost.
+            const argObj = String((mission.args as Record<string, unknown>)?.objective || '');
+            const obj = argObj.length > (text?.length ?? 0) ? argObj : (text || argObj);
             void this.runMission(obj);
             allSpoken.push(call.speak?.trim() || "Okay — jeg går i gang. Jeg lægger en plan først og bygger så løs; sig 'status', 'pause' eller 'stop' når som helst.");
             break;
