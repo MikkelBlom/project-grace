@@ -142,7 +142,18 @@ function describeEnvironment(): string {
 // fresh on every turn so hot-loaded tools (create_tool) appear immediately — without
 // this, a self-built tool would register in the live registry but never show up in the
 // prompt, so the model would never know to call it until a restart.
-const STATIC_PROMPT = [loadPersonality(), describeEnvironment()].filter(Boolean).join('\n\n');
+// How Grace should handle "hold the floor" listening and long autonomous work.
+const INTERACTION_GUIDANCE = [
+  'LISTEN MODE ("hold the floor"):',
+  '- Sometimes Mikkel wants to explain something long or complex across pauses without you jumping in. When he signals that — e.g. "slå lyttelapperne ud", "lad mig forklare", "bare lyt, jeg har en lang idé" — call enter_listen_mode so you go quiet and just listen until he says he is done, then answer the whole thing at once.',
+  '- If you are NOT sure he wants that, do NOT call it — ASK first ("Vil du have jeg bare lytter, til du er klar?") and only call enter_listen_mode after he confirms.',
+  '',
+  'LONG AUTONOMOUS WORK:',
+  '- For a big open-ended goal that needs many steps over a long time (e.g. "research X, then build and test 20+ tools"), call start_mission with the objective — you will plan a backlog and work through it on your own, continuing past the normal step limits.',
+  '- Mikkel can interrupt any time by voice ("status", "pause", "stop") or hotkey; keep working until the backlog is done or he stops you. Do not stop just because one step finished.',
+].join('\n');
+
+const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE].filter(Boolean).join('\n\n');
 function currentSystemPrompt(): string {
   return [STATIC_PROMPT, describeTools()].filter(Boolean).join('\n\n');
 }
@@ -341,6 +352,15 @@ export class OllamaLLM {
             // Otherwise this is her final answer for the turn.
             if (spoke) allSpoken.push(spoke);
             break;
+          }
+
+          // Listen mode: Grace decided (semantically) to hold the floor. Switch GraceCore state
+          // and end the turn — GraceCore.enterListenMode speaks the "I'm listening…" ack.
+          const listen = call.calls.find(c => c.tool === 'enter_listen_mode');
+          if (listen) {
+            console.log('[OllamaLLM] 🎧 entering listen mode (model-initiated)');
+            bus.emit('control:listenMode', { on: true });
+            return;
           }
 
           // Mission is special: a long autonomous run. Fire it and return.

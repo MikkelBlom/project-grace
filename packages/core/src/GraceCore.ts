@@ -16,8 +16,19 @@ import type { GraceConfig, GraceMode, GracePowerState, ConversationTurn } from '
 // Hold-the-floor / "listen mode" trigger phrases (case-insensitive, DA + EN).
 // START → Grace goes silent and buffers everything you say until an END phrase, then
 // answers the whole thing at once. Lets you explain complex ideas with pauses.
-const LISTEN_START_RE = /(let me explain|let me think out loud|hold on,? let me|don'?t interrupt|don'?t respond yet|listen up|hear me out|lad mig forklare|lad mig tale ud|lad mig tænke højt|hør (her|efter)|lyt (nu|lige)|afbryd mig ikke|jeg (skal|vil) (lige )?forklare)/i;
-const LISTEN_END_RE = /(i'?m done|that'?s it|that'?s all|i'?m finished|over to you|your turn|go ahead now|jeg er færdig|det var det|det var alt|din tur|værsgo|så er jeg færdig|nu kan du svare|nu er det din tur|okay,? kør|kør nu)/i;
+// Explicit, unambiguous "hold the floor" phrases — these enter listen mode immediately,
+// no asking. (Less explicit hints are handled semantically by the LLM via enter_listen_mode,
+// which asks Mikkel to confirm first.)
+const LISTEN_START_RE = /(let me explain|let me think out loud|hold on,? let me|don'?t interrupt|don'?t respond yet|listen up|hear me out|just listen|lad mig forklare|lad mig (snakke|tale|tænke) (ud|færdig|højt)|lad mig tale ud|hør (her|efter)|lytte? efter|slå (dine )?lyttelapper(ne)? ud|du skal (bare |lige )?lytte|bare lyt|lyt(te)?[- ]?mode|lyt (nu|lige)|afbryd mig ikke|jeg (skal|vil) (lige )?forklare)/i;
+const LISTEN_END_RE = /(i'?m done|that'?s it|that'?s all|i'?m finished|over to you|your turn|go ahead now|jeg er færdig|det var det|det var alt|din tur|værsgo|så er jeg færdig|nu kan du svare|nu er det din tur|okay,? kør|så kør|kør nu|gå i gang|kom i gang|du kan (godt )?(svare|starte|gå i gang)|nu må du (gerne)?)/i;
+
+// Voice control fast-path — short, command-like utterances that map straight to control:*
+// events, so Mikkel can stop/pause/resume/ask for status by voice even while a mission runs
+// (anchored + only on short utterances, so a "stop" mid-explanation doesn't false-trigger).
+const CTRL_STOP_RE   = /^(stop|stop nu|stop det|stop arbejdet|hold op|hold da op|afbryd|cancel|abort)\b/i;
+const CTRL_PAUSE_RE  = /^(pause|pausér|pauser|sæt (det )?på pause|hold (en )?pause|vent lige)\b/i;
+const CTRL_RESUME_RE = /^(fortsæt|forsæt|kør videre|genoptag|resume)\b/i;
+const CTRL_STATUS_RE = /^(status|statusrapport|hvor langt er du( med.*)?|giv (mig )?(en )?status(rapport)?)\b/i;
 
 export class GraceCore {
   private config: GraceConfig;
@@ -62,6 +73,16 @@ export class GraceCore {
       }
 
       let utterance = text;
+
+      // ── Voice control fast-path (stop / pause / resume / status) ──
+      // Runs BEFORE the isProcessing guard and listen mode so it works even mid-work.
+      const u = utterance.trim();
+      if (u.length <= 30) {
+        if (CTRL_STOP_RE.test(u))   { console.log('[Core] 🎙 voice STOP');   bus.emit('control:stop',   { reason: 'voice' }); return; }
+        if (CTRL_PAUSE_RE.test(u))  { console.log('[Core] 🎙 voice PAUSE');  bus.emit('control:pause',  { reason: 'voice' }); return; }
+        if (CTRL_RESUME_RE.test(u)) { console.log('[Core] 🎙 voice RESUME'); bus.emit('control:resume', { reason: 'voice' }); return; }
+        if (CTRL_STATUS_RE.test(u)) { console.log('[Core] 🎙 voice STATUS'); bus.emit('control:status', {}); return; }
+      }
 
       // ── Hold-the-floor / listen mode ──────────
       const lower = utterance.trim().toLowerCase();
