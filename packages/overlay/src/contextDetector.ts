@@ -16,13 +16,50 @@
 // Poll interval: 2000ms (configurable via GRACE_CONTEXT_POLL_MS)
 // ─────────────────────────────────────────────
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { bus } from '@grace/core';
 
-const execAsync = promisify(exec);
-
 const POLL_MS = parseInt(process.env.GRACE_CONTEXT_POLL_MS ?? '2000', 10);
+
+// ─────────────────────────────────────────────
+// PowerShell runner (-EncodedCommand)
+//
+// Scripts are passed via -EncodedCommand (base64 UTF-16LE) so the whole
+// multi-line script runs as a single argument — no newline→space mangling,
+// no quote-escaping. This mirrors packages/tools/src/lib/powershell.ts.
+// We don't import that helper because @grace/overlay does not depend on
+// @grace/tools, and pulling in a cross-package dependency for one function
+// isn't worth it.
+// ─────────────────────────────────────────────
+
+interface PsResult { stdout: string; stderr: string; code: number; }
+
+function runPowerShell(script: string, timeoutMs: number): Promise<PsResult> {
+  return new Promise((resolve) => {
+    // Force UTF-8 on the output pipe so non-ASCII titles survive.
+    const full = '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n' + script;
+    const encoded = Buffer.from(full, 'utf16le').toString('base64');
+
+    const ps = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded,
+    ]);
+
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { try { ps.kill(); } catch { /* noop */ } }, timeoutMs);
+
+    ps.stdout.on('data', (d) => { stdout += d.toString(); });
+    ps.stderr.on('data', (d) => { stderr += d.toString(); });
+    ps.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: stderr.trim(), code: code ?? -1 });
+    });
+    ps.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: String(err), code: -1 });
+    });
+  });
+}
 
 // Apps that trigger Discreet Mode automatically
 const DISCREET_APPS = new Set([
@@ -71,39 +108,48 @@ interface WindowInfo {
   url?: string;
 }
 
-// PowerShell script that returns active window info as JSON
+// PowerShell script that returns active window info as JSON.
+//
+// Uses UI Automation + System.Windows.Forms ONLY — no user32 P/Invoke
+// (GetForegroundWindow / GetWindowText / GetWindowRect). AMSI/antivirus flags
+// the `Add-Type [DllImport("user32.dll")]` pattern as malicious and BLOCKS the
+// script ("This script contains malicious content..."), which silently killed
+// context detection. UI Automation's FocusedElement gives us the element, its
+// process id, the containing window's title and bounding rectangle — all in
+// pure managed code AV is happy with. Mirrors get_active_context.ts.
 const PS_SCRIPT = `
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public class WinAPI {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-}
-"@
-
-$hwnd = [WinAPI]::GetForegroundWindow()
-$sb = New-Object System.Text.StringBuilder(256)
-[WinAPI]::GetWindowText($hwnd, $sb, 256) | Out-Null
-$title = $sb.ToString()
-
-$pid = 0
-[WinAPI]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
-$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-$name = if ($proc) { $proc.Name } else { "" }
-
-$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
-$rect = New-Object WinAPI+RECT
-[WinAPI]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
-$w = $rect.Right - $rect.Left
-$h = $rect.Bottom - $rect.Top
-$fullscreen = ($w -ge $screen.Width -and $h -ge $screen.Height)
-
+Add-Type -AssemblyName System.Drawing
+$fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+$title = ""; $procId = 0; $bx = 0; $by = 0; $bw = 0; $bh = 0
+if ($fe) {
+  $procId = $fe.Current.ProcessId
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $root = $fe
+  while ($root -ne $null -and $root.Current.ControlType.ProgrammaticName -ne "ControlType.Window") {
+    $p = $walker.GetParent($root)
+    if ($p -eq $null) { break }
+    $root = $p
+  }
+  if ($root -ne $null) {
+    $title = $root.Current.Name
+    $r = $root.Current.BoundingRectangle
+    $bx = $r.X; $by = $r.Y; $bw = $r.Width; $bh = $r.Height
+  } else {
+    $title = $fe.Current.Name
+  }
+}
+$proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+$name = if ($proc) { $proc.Name } else { "" }
+$fullscreen = $false
+if ($bw -gt 0) {
+  $rect = New-Object System.Drawing.Rectangle([int]$bx, [int]$by, [int]$bw, [int]$bh)
+  $scr = [System.Windows.Forms.Screen]::FromRectangle($rect).Bounds
+  $fullscreen = ($bw -ge $scr.Width -and $bh -ge $scr.Height)
+}
 ConvertTo-Json @{ process=$name; title=$title; fullscreen=$fullscreen } -Compress
 `.trim();
 
@@ -114,6 +160,7 @@ export class ContextDetector {
   private lastContext: WindowInfo | null = null;
   private lastDiscreetState = false;
   private lastFullscreen = false;
+  private loggedPollFailure = false;
 
   start(): void {
     console.log(`[ContextDetector] Started — polling every ${POLL_MS}ms`);
@@ -131,10 +178,11 @@ export class ContextDetector {
 
   private async poll(): Promise<void> {
     try {
-      const { stdout } = await execAsync(
-        `powershell -NoProfile -NonInteractive -Command "${PS_SCRIPT.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
-        { timeout: 3000 },
-      );
+      const { stdout, stderr, code } = await runPowerShell(PS_SCRIPT, 3000);
+      if (code !== 0) {
+        this.reportPollFailure(`exit ${code}${stderr ? `: ${stderr}` : ''}`);
+        return;
+      }
 
       const info = JSON.parse(stdout.trim()) as {
         process: string;
@@ -148,11 +196,22 @@ export class ContextDetector {
         isFullscreen: info.fullscreen ?? false,
       };
 
+      // A clean read clears the failure latch so a later breakage logs again.
+      this.loggedPollFailure = false;
       this.handleContextChange(ctx);
 
-    } catch {
-      // Silently ignore polling errors (window focus changes rapidly)
+    } catch (err) {
+      // Transient focus-change races are common; log only the FIRST failure so a
+      // real breakage (e.g. AMSI blocking the script) is visible without spamming.
+      this.reportPollFailure(String(err));
     }
+  }
+
+  // Logs a poll failure once, then stays quiet until the next successful read.
+  private reportPollFailure(detail: string): void {
+    if (this.loggedPollFailure) return;
+    this.loggedPollFailure = true;
+    console.warn(`[ContextDetector] Active-window poll failed — context detection paused: ${detail}`);
   }
 
   private handleContextChange(ctx: WindowInfo): void {

@@ -7,11 +7,15 @@
 /* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Force full transparency — on some Windows GPU configs Electron paints an
+   opaque backdrop unless every layer is explicitly transparent. */
+:root { background: transparent !important; }
+
 html, body {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background: transparent;
+  background: transparent !important;
   pointer-events: none;
   user-select: none;
 }
@@ -86,6 +90,16 @@ html, body {
 .focus-box-group {
   position: absolute;
   pointer-events: none;
+  /* --reveal-delay holds the inner draw-on animations until the box has
+     finished flying in from the Grace icon (set per-box in JS). */
+  --reveal-delay: 0s;
+}
+
+/* Fly-in: the whole group originates from the Grace icon (bottom-right corner)
+   and travels to the target, leaving a soft purple glow trail. --fly-x/--fly-y
+   are the start offset (origin - target), set per-box in JS. */
+.focus-box-group.flying {
+  animation: box-fly-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 .focus-box-rect {
@@ -95,20 +109,20 @@ html, body {
   /* SVG stroke-dashoffset draw-on animation */
   stroke-dasharray: var(--perimeter);
   stroke-dashoffset: var(--perimeter);
-  animation: box-draw 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: box-draw 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) var(--reveal-delay) forwards;
 }
 
 .focus-box-rect.pulsing {
   animation:
-    box-draw  0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards,
-    box-pulse 1.4s ease-in-out 0.4s infinite;
+    box-draw  0.4s cubic-bezier(0.34, 1.56, 0.64, 1) var(--reveal-delay) forwards,
+    box-pulse 1.4s ease-in-out calc(var(--reveal-delay) + 0.4s) infinite;
 }
 
 .focus-box-glow {
   fill: rgba(99, 85, 212, 0.06);
   stroke: none;
   opacity: 0;
-  animation: box-glow-in 0.4s ease 0.15s forwards;
+  animation: box-glow-in 0.4s ease calc(var(--reveal-delay) + 0.15s) forwards;
 }
 
 /* Corner dots */
@@ -118,16 +132,16 @@ html, body {
   opacity: 0;
   animation: corner-pop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
-.focus-corner:nth-child(1) { animation-delay: 0.10s; }
-.focus-corner:nth-child(2) { animation-delay: 0.15s; }
-.focus-corner:nth-child(3) { animation-delay: 0.20s; }
-.focus-corner:nth-child(4) { animation-delay: 0.25s; }
+.focus-corner:nth-child(1) { animation-delay: calc(var(--reveal-delay) + 0.10s); }
+.focus-corner:nth-child(2) { animation-delay: calc(var(--reveal-delay) + 0.15s); }
+.focus-corner:nth-child(3) { animation-delay: calc(var(--reveal-delay) + 0.20s); }
+.focus-corner:nth-child(4) { animation-delay: calc(var(--reveal-delay) + 0.25s); }
 
 /* Label tooltip */
 .focus-label-group {
   opacity: 0;
   transform: translateY(-8px);
-  animation: label-slide-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.3s forwards;
+  animation: label-slide-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) calc(var(--reveal-delay) + 0.3s) forwards;
 }
 
 .focus-label-bg {
@@ -157,6 +171,22 @@ html, body {
   animation: box-glow-out 0.3s ease forwards;
 }
 
+@keyframes box-fly-in {
+  0% {
+    transform: translate(var(--fly-x, 0px), var(--fly-y, 0px)) scale(0.35);
+    opacity: 0;
+    filter: drop-shadow(0 0 14px rgba(124, 106, 247, 0.9));
+  }
+  55% {
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(124, 106, 247, 0.65));
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+    filter: drop-shadow(0 0 0 rgba(124, 106, 247, 0));
+  }
+}
 @keyframes box-draw {
   to { stroke-dashoffset: 0; }
 }
@@ -196,6 +226,10 @@ html, body {
 <svg id="focus-layer" xmlns="http://www.w3.org/2000/svg"></svg>
 
 <script>
+// ─── Startup diagnostics ───────────────────────────
+console.log(`[Grace Vignette] renderer loaded — window ${window.innerWidth}x${window.innerHeight}, ` +
+            `devicePixelRatio ${window.devicePixelRatio}`);
+
 // ─── Vignette state ────────────────────────────────
 const vignette = document.getElementById('vignette');
 let vignetteState = 'idle';
@@ -218,6 +252,16 @@ function createFocusBox({ x, y, w, h, label, duration = 4000, pulse = false }) {
 
   const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   group.classList.add('focus-box-group');
+
+  // Fly-in: originate from the Grace icon (bottom-right corner of this display)
+  // and travel to the target. --fly-x/--fly-y are the start offset; --reveal-delay
+  // holds the draw-on/corner/label animations until the box has arrived.
+  const originX = window.innerWidth - 40;
+  const originY = window.innerHeight - 40;
+  group.classList.add('flying');
+  group.style.setProperty('--fly-x', (originX - (x + w / 2)) + 'px');
+  group.style.setProperty('--fly-y', (originY - (y + h / 2)) + 'px');
+  group.style.setProperty('--reveal-delay', '0.4s');
 
   // Glow fill
   const glow = document.createElementNS('http://www.w3.org/2000/svg', 'rect');

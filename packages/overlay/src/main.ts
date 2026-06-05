@@ -35,6 +35,15 @@ const LLM_PROVIDER = process.env.GRACE_LLM_PROVIDER ?? 'ollama';
 const STT_PROVIDER = process.env.GRACE_STT_PROVIDER ?? 'whisper';
 const TTS_PROVIDER = process.env.GRACE_TTS_PROVIDER ?? 'kokoro';
 
+// ── Transparent-overlay GPU flags (must run before app.whenReady) ─
+// Transparent, always-on-top, click-through windows (the vignette) need GPU
+// compositing; on some Windows GPU configs Electron otherwise renders them black
+// or never paints them. This switch forces the transparent-visuals code path.
+app.commandLine.appendSwitch('enable-transparent-visuals');
+// Fallback for debugging a black/opaque overlay — forces software compositing.
+// Uncomment ONLY if transparency still fails with the switch above.
+// app.commandLine.appendSwitch('disable-gpu-compositing');
+
 let mainWindow:      BrowserWindow    | null = null;
 let core:            GraceCore        | null = null;
 let stt:             { start(): void; stop(): void } | null = null;
