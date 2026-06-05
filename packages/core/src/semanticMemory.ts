@@ -255,9 +255,30 @@ class BackendStore {
   }
 
   private makeSqlite(): Backend | null {
-    try {
+    // 1) node:sqlite — present in standalone Node 22.5+/24 (CLI scripts, tests),
+    //    but NOT in Electron's bundled Node (compiled out → ERR_UNKNOWN_BUILTIN_MODULE).
+    const builtin = this.trySqliteDriver(() => {
       const { DatabaseSync } = require('node:sqlite');
-      const db = new DatabaseSync(TURN_DB_PATH);
+      return new DatabaseSync(TURN_DB_PATH);
+    }, 'node:sqlite');
+    if (builtin) return builtin;
+
+    // 2) better-sqlite3 — native module that DOES work inside Electron (after
+    //    electron-rebuild). This is the path Grace's Electron app uses.
+    const better = this.trySqliteDriver(() => {
+      const Database = require('better-sqlite3');
+      return new Database(TURN_DB_PATH);
+    }, 'better-sqlite3');
+    if (better) return better;
+
+    return null;
+  }
+
+  // node:sqlite's DatabaseSync and better-sqlite3 expose the same
+  // exec()/prepare()/run()/all()/get() surface, so one builder handles both.
+  private trySqliteDriver(open: () => any, label: string): Backend | null {
+    try {
+      const db = open();
       db.exec(`CREATE TABLE IF NOT EXISTS turns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session TEXT NOT NULL,
@@ -269,6 +290,7 @@ class BackendStore {
       const recent = db.prepare('SELECT session, role, content, ts FROM turns ORDER BY id DESC LIMIT ?');
       const lastSess = db.prepare('SELECT session FROM turns WHERE session != ? ORDER BY id DESC LIMIT 1');
       const lastUser = db.prepare("SELECT content FROM turns WHERE session = ? AND role = 'user' ORDER BY id DESC LIMIT 1");
+      console.log(`[Memory] sqlite backend: ${label}`);
       return {
         addTurn: (t) => { ins.run(t.session, t.role, t.content, t.ts); },
         recentTurns: (limit) => (recent.all(limit) as Turn[]).reverse(),
@@ -276,7 +298,11 @@ class BackendStore {
         lastUserMessageOf: (session) => ((lastUser.get(session) as { content?: string } | undefined)?.content ?? null),
       };
     } catch (error) {
-      console.warn('[Memory] sqlite backend unavailable:', String(error).slice(0, 120));
+      // node:sqlite simply being absent in Electron is expected — don't warn for it.
+      const msg = String(error);
+      if (!msg.includes('node:sqlite')) {
+        console.warn(`[Memory] ${label} backend unavailable:`, msg.slice(0, 140));
+      }
       return null;
     }
   }
