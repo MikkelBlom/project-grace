@@ -1,7 +1,7 @@
 import { registerTool } from '../registry.js';
 
 // Recent tech/security news by composing web_search across a few queries.
-// Demonstrates a tool calling another tool via ctx.callTool (see docs/adding-tools.md).
+// Demonstrates a tool calling another tool via ctx.callTool (see docs/3-TOOLS.md).
 registerTool({
   name: 'news_fetcher',
   description: 'Get recent news headlines in software engineering, data breaches, and cyber attacks. Optionally pass a topic to focus the search.',

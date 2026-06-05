@@ -12,7 +12,7 @@
 //        [--rebuild]     # rebuild the sandbox image (after changing the tools framework)
 //
 // This is the safe-execution layer Grace's auto-develop loop calls before plugging
-// in self-written tools. See docs/auto-develop.md.
+// in self-written tools. See docs/4-AUTO-DEVELOPMENT.md.
 // ─────────────────────────────────────────────────────────────────────────────
 import { execSync, spawnSync } from 'child_process';
 import fs from 'fs';

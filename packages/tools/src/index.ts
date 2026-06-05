@@ -5,7 +5,7 @@
 // so they self-register via registerTool() at import time.
 //
 // To add a new tool: create packages/tools/src/tools/<name>.ts, then add
-// one `import './tools/<name>.js';` line below. See docs/adding-tools.md.
+// one `import './tools/<name>.js';` line below. See docs/3-TOOLS.md.
 // ─────────────────────────────────────────────
 
 // ── Public API (re-exported from registry) ───────────────────────
@@ -41,8 +41,21 @@ import './tools/news_fetcher.js';
 import './tools/word_counter.js';
 import './tools/temperature_converter.js';
 import './tools/date_difference_calculator.js';
-import './tools/mission_log_updater.js';
-import './tools/phase_3_consolidation.js';
 import './tools/summarize_and_extract.js';
 import './tools/organize_files_by_extension.js';
-import './tools/develop_api_integration_stubs.js';
+import './tools/update_scratchpad.js';
+import './tools/update_user_profile.js';
+import './tools/recall_memory.js';
+import './tools/get_scratchpad.js';
+import './tools/list_workspaces.js';
+import './tools/export_scratchpad.js';
+import './tools/index_projects.js';
+import './tools/find_path.js';
+import './tools/verify_mutation.js';
+import './tools/reflect_on_session.js';
+import './tools/update_personality.js';
+// ── UI overlay & vision ──
+import './tools/focus_box.js';
+import './tools/get_active_context.js';
+import './tools/take_screenshot.js';
+import './tools/analyze_screen.js';

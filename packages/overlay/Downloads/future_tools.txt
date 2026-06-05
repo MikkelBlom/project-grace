@@ -1,1 +1,0 @@
-The three tools I'd like access to for better development are: 1. A code execution environment to test logic, 2. Calendar access to manage schedules, and 3. Smart home integration to control the environment.
