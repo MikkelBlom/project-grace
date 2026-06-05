@@ -79,15 +79,15 @@ registerTool({
 
     let prompt = question;
     if (findElement) {
+      // gemma4 shares Gemini's lineage and is trained to emit bounding boxes as
+      // box_2d = [ymin, xmin, ymax, xmax] normalized to 0-1000 (origin top-left).
+      // Asking in that native format is far more reliable than a custom x/y/w/h
+      // percentage scheme (which the model tends to collapse to 100s).
       prompt +=
-        '\n\nLocate that element in the image and respond ONLY with a compact JSON object. ' +
-        'Use PERCENTAGES of the image size (0-100), with the ORIGIN AT THE TOP-LEFT corner:\n' +
-        '  x_pct = how far the element\'s LEFT edge is from the left of the image\n' +
-        '  y_pct = how far the element\'s TOP edge is from the top of the image\n' +
-        '  w_pct = the element\'s width;  h_pct = the element\'s height\n' +
-        'The box must stay inside the image, so x_pct + w_pct <= 100 and y_pct + h_pct <= 100. ' +
-        'Example: an element in the top-right quarter ≈ {"x_pct":55,"y_pct":5,"w_pct":40,"h_pct":40}.\n' +
-        'Shape: {"found":true,"x_pct":<num>,"y_pct":<num>,"w_pct":<num>,"h_pct":<num>,"note":"<where it is, briefly>"}\n' +
+        '\n\nFind that element and respond ONLY with a compact JSON object. Give its bounding ' +
+        'box as "box_2d": [ymin, xmin, ymax, xmax], with every value normalized to 0-1000 ' +
+        '(0 = top/left edge of the image, 1000 = bottom/right edge; origin at the top-left corner).\n' +
+        'Shape: {"found":true,"box_2d":[<ymin>,<xmin>,<ymax>,<xmax>],"note":"<where it is, briefly>"}\n' +
         'If you cannot find it, return {"found":false,"note":"..."}. No other text.';
     }
 
@@ -119,27 +119,53 @@ registerTool({
       return { description: content || '(no description returned)' };
     }
 
-    // ── find_element: parse percentages, map to absolute screen pixels ──
+    // ── find_element: parse the box, map to absolute screen pixels ──
     const obj = extractJson(content);
     if (!obj || obj.found === false) {
       return { description: obj?.note ?? content, found: false, boundingBox: null };
     }
-
-    const xp = asPercent(obj.x_pct ?? obj.x);
-    const yp = asPercent(obj.y_pct ?? obj.y);
-    const wp = asPercent(obj.w_pct ?? obj.w);
-    const hp = asPercent(obj.h_pct ?? obj.h);
-    if (xp == null || yp == null || wp == null || hp == null || imgW === 0 || imgH === 0) {
+    if (imgW === 0 || imgH === 0) {
       return { description: obj.note ?? content, found: false, boundingBox: null,
-               note: 'Model did not return usable coordinates.' };
+               note: 'Unknown image dimensions — cannot map coordinates.' };
     }
 
-    // Map to absolute pixels, then clamp so the box stays within this monitor —
-    // a rough estimate from the model still produces an on-screen box.
-    const localX = Math.min((xp / 100) * imgW, imgW - 1);
-    const localY = Math.min((yp / 100) * imgH, imgH - 1);
-    const w = Math.max(1, Math.min((wp / 100) * imgW, imgW - localX));
-    const h = Math.max(1, Math.min((hp / 100) * imgH, imgH - localY));
+    let localX: number, localY: number, w: number, h: number;
+    let raw: Record<string, unknown>;
+
+    // Preferred: gemma4/Gemini-native box_2d = [ymin, xmin, ymax, xmax] in 0-1000.
+    const box = Array.isArray(obj.box_2d) ? obj.box_2d
+              : Array.isArray(obj.bbox)   ? obj.bbox
+              : Array.isArray(obj.box)    ? obj.box : null;
+    if (box && box.length === 4 && box.every((n: unknown) => Number.isFinite(Number(n)))) {
+      const clamp1000 = (v: number) => Math.max(0, Math.min(1000, v));
+      let [ymin, xmin, ymax, xmax] = (box as number[]).map(Number);
+      if (ymax < ymin) [ymin, ymax] = [ymax, ymin]; // tolerate reversed order
+      if (xmax < xmin) [xmin, xmax] = [xmax, xmin];
+      ymin = clamp1000(ymin); xmin = clamp1000(xmin); ymax = clamp1000(ymax); xmax = clamp1000(xmax);
+      localX = (xmin / 1000) * imgW;
+      localY = (ymin / 1000) * imgH;
+      w = ((xmax - xmin) / 1000) * imgW;
+      h = ((ymax - ymin) / 1000) * imgH;
+      raw = { box_2d: [ymin, xmin, ymax, xmax] };
+    } else {
+      // Fallback: older x_pct/y_pct/w_pct/h_pct percentage form.
+      const xp = asPercent(obj.x_pct ?? obj.x), yp = asPercent(obj.y_pct ?? obj.y);
+      const wp = asPercent(obj.w_pct ?? obj.w), hp = asPercent(obj.h_pct ?? obj.h);
+      if (xp == null || yp == null || wp == null || hp == null) {
+        return { description: obj.note ?? content, found: false, boundingBox: null,
+                 note: 'Model did not return usable coordinates.' };
+      }
+      localX = (xp / 100) * imgW; localY = (yp / 100) * imgH;
+      w = (wp / 100) * imgW; h = (hp / 100) * imgH;
+      raw = { x_pct: xp, y_pct: yp, w_pct: wp, h_pct: hp };
+    }
+
+    // Clamp so the box stays within this monitor — a rough estimate still renders.
+    localX = Math.min(Math.max(0, localX), imgW - 1);
+    localY = Math.min(Math.max(0, localY), imgH - 1);
+    w = Math.max(1, Math.min(w, imgW - localX));
+    h = Math.max(1, Math.min(h, imgH - localY));
+
     const boundingBox = {
       x: Math.round(originX + localX),
       y: Math.round(originY + localY),
@@ -151,7 +177,7 @@ registerTool({
       description: obj.note ?? content,
       found: true,
       boundingBox,
-      percentages: { x_pct: xp, y_pct: yp, w_pct: wp, h_pct: hp },
+      raw,
       monitorIndex: sidecar?.monitorIndex,
     };
   },
