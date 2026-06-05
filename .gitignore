@@ -25,3 +25,12 @@ models/
 
 # Grace runtime data (on new machine)
 ~/Grace/
+
+# ChromaDB vector store (runtime data, regenerated)
+docker/
+
+# Throwaway scratch scripts
+scratch/
+
+# Separate nested project repo — must not be embedded in the grace repo
+odysseus/

@@ -16,10 +16,10 @@
 // Grace's system prompt er injected her — dette er hendes identitet.
 // ─────────────────────────────────────────────
 
-import { bus } from '@grace/core';
+import { bus, graceMemory } from '@grace/core';
 import os from 'os';
 import path from 'path';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { describeTools, parseToolCall, runTool, TaskRegistry, MissionRegistry } from '@grace/tools';
 
@@ -113,6 +113,27 @@ function describeEnvironment(): string {
   try { user = os.userInfo().username; } catch { /* ignore */ }
   const sep = path.sep;
   const f = (name: string) => `${home}${sep}${name}`;
+
+  let projectList = '';
+  try {
+    const PKG_DIR = path.dirname(fileURLToPath(import.meta.url));
+    const repoRoot = path.resolve(PKG_DIR, '../../..');
+    const spatialMapPath = path.join(repoRoot, 'data', 'spatial-map.json');
+    if (existsSync(spatialMapPath)) {
+      const projects = JSON.parse(readFileSync(spatialMapPath, 'utf-8'));
+      if (Array.isArray(projects) && projects.length > 0) {
+        // Sort by mtime descending and take top 6
+        const topProjects = projects
+          .sort((a: any, b: any) => b.mtime - a.mtime)
+          .slice(0, 6)
+          .map((p: any) => `- Project folder "${p.name}" → ${p.path} (${p.type})`);
+        projectList = '\nRecent project paths under your home folder:\n' + topProjects.join('\n');
+      }
+    }
+  } catch (e) {
+    // Ignore error
+  }
+
   return [
     'ENVIRONMENT — FACTS about this machine. Use these EXACT paths; never invent a username or guess a path:',
     `- OS: ${os.platform()} ${os.release()}`,
@@ -124,6 +145,7 @@ function describeEnvironment(): string {
     `- dokumenter / documents → ${f('Documents')}`,
     `- billeder / pictures → ${f('Pictures')}`,
     `- musik → ${f('Music')} · videoer → ${f('Videos')}`,
+    projectList,
     '',
     'FILE WORK — how to touch files safely:',
     '- Locate with search_files, read with read_file, then change with edit_file (surgical replace).',
@@ -153,9 +175,51 @@ const INTERACTION_GUIDANCE = [
   '- Mikkel can interrupt any time by voice ("status", "pause", "stop") or hotkey; keep working until the backlog is done or he stops you. Do not stop just because one step finished.',
 ].join('\n');
 
-const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE].filter(Boolean).join('\n\n');
+const COGNITIVE_GUIDANCE = [
+  'COGNITIVE ARCHITECTURE:',
+  '- A TASK is work you do with existing tools. A TOOL is permanent TypeScript code. Do not create a tool when the task can be done now with the existing toolbox.',
+  '- Keep the persistent scratchpad current during long work. Use update_scratchpad for plan, current step, file paths, intermediate results, verification, risks, and notes.',
+  '- Use update_user_profile for durable facts about Mikkel: workflows, style preferences, routines, code conventions, recurring people/projects, and changing preferences.',
+  '- Always verify the result before marking work done. If you created or edited a file, read it back and confirm the right content. If you created a folder, list it and confirm the path. If you moved or deleted something, verify the before/after state.',
+  '- If the same build or typecheck error repeats, stop rerunning the same attempt. Reflect, change strategy, and escalate only after you have tried a meaningfully different fix.',
+].join('\n');
+
+const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE, COGNITIVE_GUIDANCE].filter(Boolean).join('\n\n');
 function currentSystemPrompt(): string {
   return [STATIC_PROMPT, describeTools()].filter(Boolean).join('\n\n');
+}
+
+function inferPromptQuery(messages: Array<{ role: string; content: string }>): string {
+  const userMessage = [...messages].reverse().find((message) => message.role !== 'system')?.content ?? '';
+  return String(userMessage ?? '').trim();
+}
+
+async function promptWithMemory(systemPrompt: string, query: string): Promise<string> {
+  const blocks = await graceMemory.buildPromptBlocks(query || 'current turn');
+  // Also attempt an explicit recall via the recall_memory tool for a compact prioritized hit list
+  try {
+    const recall = await runTool('recall_memory', { query: query || 'current turn', limit: 6, recencyWeight: 0.3 });
+    if (recall && typeof recall === 'object' && (recall as any).ok) {
+      const hits = Array.isArray((recall as any).hits) ? (recall as any).hits as any[] : [];
+      if (hits.length) {
+        const lines = ['RECALL TOOL RESULTS — prioritized memory hits:'];
+        for (let i = 0; i < Math.min(6, hits.length); i++) {
+          const h = hits[i];
+          const prefix = `#${i + 1} [${h.namespace}/${h.kind}]`;
+          const src = h.source ? ` source=${h.source}` : '';
+          const obj = h.objective ? ` objective=${h.objective}` : '';
+          const tags = h.tags && h.tags.length ? ` tags=${h.tags.join(',')}` : '';
+          lines.push(`- ${prefix} ${String(h.summary ?? '').slice(0, 200)}${src}${obj}${tags}`);
+        }
+        blocks.unshift(lines.join('\n'));
+      }
+    }
+  } catch (e) {
+    // don't fail prompt composition if recall tool errors
+    console.warn('[OllamaLLM] recall_memory failed:', e);
+  }
+
+  return [systemPrompt, ...blocks].filter(Boolean).join('\n\n');
 }
 
 interface OllamaMessage {
@@ -190,7 +254,26 @@ export class OllamaLLM {
     this.baseUrl = baseUrl;
     this.setupListeners();
     this.setupControlListeners();
+    this.resumeInterruptedWorkspace();
     this.checkAvailability();
+  }
+
+  private resumeInterruptedWorkspace(): void {
+    const workspace = graceMemory.getActiveWorkspace();
+    if (!workspace || (workspace.status !== 'planning' && workspace.status !== 'active')) return;
+    if (TaskRegistry.isRunning() || MissionRegistry.isRunning()) return;
+    setTimeout(() => {
+      const current = graceMemory.getActiveWorkspace();
+      if (!current || current.status === 'done' || current.status === 'failed' || current.status === 'cancelled') return;
+      console.log(`[OllamaLLM] 🔁 resuming ${current.kind} workspace ${current.id}`);
+      bus.emit('overlay:notification', {
+        text: `Genoptager ${current.kind} efter genstart`,
+        level: 'info',
+        duration: 5000,
+      });
+      if (current.kind === 'mission') void this.runMission(current.objective || 'resume mission');
+      else void this.runBackgroundTask(current.objective || 'resume task');
+    }, 1500);
   }
 
   // ── Control: barge-in for the model side ─────
@@ -492,6 +575,7 @@ export class OllamaLLM {
       role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
       content: m.content,
     }));
+    const prompt = await promptWithMemory(systemPrompt, inferPromptQuery(norm));
     // Use an abortable signal stored on the instance so control:stop can end generation
     // mid-stream (barge-in), plus a manual 180s timeout fallback.
     const ac = new AbortController();
@@ -503,7 +587,7 @@ export class OllamaLLM {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: this.model,
-          messages: [{ role: 'system', content: systemPrompt }, ...norm],
+          messages: [{ role: 'system', content: prompt }, ...norm],
           stream: false,
           think: false,
           format: 'json',
@@ -530,10 +614,23 @@ export class OllamaLLM {
     }
   }
 
+  private extractAbsolutePaths(text: string): string[] {
+    const matches = String(text ?? '').match(/(?:[A-Z]:\\[^\s"',}\]]+|\/[^\s"',}\]]+)/g) || [];
+    return [...new Set(matches)];
+  }
+
   // ── Autonomous background task: plan → execute → verify → report back ──
-  private async runBackgroundTask(description: string): Promise<void> {
+  private async runBackgroundTask(description: string): Promise<boolean> {
     const t0 = Date.now();
     TaskRegistry.start(description);
+    graceMemory.startWorkspace('task', description);
+    graceMemory.updateScratchpad({
+      objective: description,
+      status: 'planning',
+      summary: 'Background task started',
+      notes: ['Task created from the LLM loop'],
+      reset: true,
+    });
     console.log(`[Task] ▶ ${description}`);
     const announce = (text: string) => {
       const sid = `task-${Date.now()}`;
@@ -556,6 +653,14 @@ export class OllamaLLM {
         content: `Make a short numbered plan (max 5 steps) to accomplish this with your tools. Output JSON with "speak": "the plan" and "tool": null.\nTASK: ${description}` }], taskSys);
       
       const parsedPlan = parseToolCall(plan)?.speak || plan;
+      const planItems = parsedPlan.split(/\r?\n/).map(line => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+      graceMemory.updateScratchpad({
+        objective: description,
+        status: 'active',
+        plan: planItems,
+        currentStep: planItems[0] || 'executing task',
+        summary: 'Plan drafted and execution started',
+      });
       console.log(`[Task] 📋 plan:\n${parsedPlan}`);
       TaskRegistry.log('made a plan');
 
@@ -573,11 +678,11 @@ export class OllamaLLM {
         if (TaskRegistry.cancelRequested) {
           console.warn('[Task] ⏹ cancelled by Mikkel');
           TaskRegistry.fail('cancelled by Mikkel');
-          return;   // the control:stop ack already told Mikkel — don't double-speak
+          return false;   // the control:stop ack already told Mikkel — don't double-speak
         }
         TaskRegistry.update(`step ${step + 1} of up to ${MAX}`);
         const reply = await this.complete(work, taskSys);
-        if (TaskRegistry.cancelRequested || this.turnCancelled) { TaskRegistry.fail('cancelled by Mikkel'); return; }
+        if (TaskRegistry.cancelRequested || this.turnCancelled) { TaskRegistry.fail('cancelled by Mikkel'); return false; }
         console.log(`[Task] 🧠 Raw reply:\n${reply}`);
         const call = parseToolCall(reply);
 
@@ -609,9 +714,22 @@ export class OllamaLLM {
             TaskRegistry.log(`${c.tool} → ${JSON.stringify(res).slice(0, 90)}`);
             return { tool: c.tool, res };
           }));
+          const serializedRuns = JSON.stringify(runs).slice(0, 4000);
+          const filePaths = this.extractAbsolutePaths(serializedRuns);
+          graceMemory.updateScratchpad({
+            status: 'active',
+            currentStep: `step ${step + 1}: ${runs.map(r => r.tool).join(', ')}`,
+            artifacts: runs.map(r => `${r.tool}: ${JSON.stringify(r.res).slice(0, 180)}`),
+            filePaths,
+            verification: filePaths.length ? [`Observed paths: ${filePaths.join(' | ')}`] : [],
+          });
           const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 128000)}`).join('\n');
-          const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
-            ? 'You changed files — VERIFY by calling list_dir on the target folder(s). Check the TOTAL count and that NO file has bytes: 0. Report the ACTUAL count you verified. ' : '';
+          const hadMutation = runs.some(r => MUTATING_TOOLS.has(r.tool));
+          const verify = hadMutation
+            ? 'You changed files — VERIFY with the right follow-up: for write_file/edit_file, read the file back and confirm the requested content is present and non-empty; for create_folder/move_file/delete_file, use list_dir on the relevant folder(s) and confirm the path/state you expected. Do not mark the task done until you actually checked it. ' : '';
+          if (hadMutation) {
+            graceMemory.updateScratchpad({ verification: [`pending:${Date.now()}`] }, 'auto_mutation');
+          }
           const taskDeferMsg = taskDeferredCount > 0
             ? `You sent ${taskDeferredCount + runs.length} calls but I ran only the first ${runs.length}. Continue with the remaining ${taskDeferredCount} in your next reply. ` : '';
           // Compact record (don't echo big file contents back into context — it bloats + slows later steps).
@@ -643,6 +761,17 @@ export class OllamaLLM {
               "You haven't actually done anything yet — no real tool has run, so nothing changed. Do the FIRST real step now (e.g. write_file / create_folder). Don't say it's done until it truly is." });
             continue;
           }
+          // Enforce verification: if pending marker exists and no verified: entries, reject done.
+          const ws = graceMemory.getActiveWorkspace();
+          const verifs = ws?.verification ?? [];
+          const hasPending = verifs.some(v => typeof v === 'string' && v.startsWith('pending:'));
+          const hasVerified = verifs.some(v => typeof v === 'string' && v.startsWith('verified:'));
+          if (hasPending && !hasVerified) {
+            rejectedEmptyDone = true;
+            work.push({ role: 'assistant', content: reply });
+            work.push({ role: 'user', content: 'You changed files but they are not yet verified. Call verify_mutation with the affected paths and report the verification before marking done.' });
+            continue;
+          }
           result = call.speak || 'Task finished.';
           break;
         }
@@ -656,9 +785,10 @@ export class OllamaLLM {
       if (!didRealWork) {
         result = "I couldn't actually carry that out — I didn't manage to complete any of the steps. Let's try again, maybe broken into smaller pieces.";
         console.warn('[Task] ✗ finished without doing any real work');
+        graceMemory.completeWorkspace('failed', result);
         TaskRegistry.fail(result);
         announce(result);
-        return;
+        return false;
       }
       // Fix 5: If we exhausted MAX steps with real work but never got a done/result, be honest.
       if (!result.trim() && step >= MAX) {
@@ -669,17 +799,22 @@ export class OllamaLLM {
         result = parseToolCall(fb)?.speak || fb;
       }
       console.log(`[Task] ✓ done in ${Math.round((Date.now() - t0) / 1000)}s`);
+      graceMemory.completeWorkspace('done', result || 'Done.');
       TaskRegistry.finish(result || 'Done.');
       bus.emit('overlay:notification', { text: '✅ Task done', level: 'info', duration: 5000 });
       announce(`Okay, I'm done. ${result || ''}`.trim());
+      return true;
     } catch (err) {
       if (TaskRegistry.cancelRequested || this.turnCancelled || /abort/i.test(String(err))) {
+        graceMemory.completeWorkspace('cancelled', 'cancelled by Mikkel');
         TaskRegistry.fail('cancelled by Mikkel');
         console.log('[Task] ⏹ aborted (barge-in)');
-        return;
+        return false;
       }
+      graceMemory.completeWorkspace('failed', String(err));
       TaskRegistry.fail(String(err));
       announce(`I hit a problem with that task: ${err}`);
+      return false;
     }
   }
 
@@ -737,6 +872,14 @@ export class OllamaLLM {
   private async runMission(objective: string): Promise<void> {
     const t0 = Date.now();
     MissionRegistry.start(objective);
+      graceMemory.startWorkspace('mission', objective);
+      graceMemory.updateScratchpad({
+        objective,
+        status: 'planning',
+        summary: 'Mission started',
+        notes: ['Mission created from the LLM loop'],
+        reset: true,
+      });
     console.log(`[Mission] ▶ ${objective}`);
     const announce = (text: string) => {
       if (!text?.trim()) return;
@@ -748,14 +891,33 @@ export class OllamaLLM {
       // ── PLAN: research (optional) + compile a concrete backlog ──
       MissionRegistry.phase('planning the backlog');
       announce('Okay — let me research and draft a plan first.');
+      // Pre-seed mission planning with recent relevant memory hits to improve planning quality.
+      try {
+        const recallRes: any = await runTool('recall_memory', { query: objective, limit: 8, recencyWeight: 0.35 });
+        if (recallRes && recallRes.ok && Array.isArray(recallRes.hits) && recallRes.hits.length) {
+          const notes = recallRes.hits.map((h: any, i: number) => `#${i + 1} [${h.namespace}/${h.kind}] ${String(h.summary ?? '').slice(0,200)}`);
+          graceMemory.updateScratchpad({ notes: notes, summary: `Pre-seeded recall: ${Math.min(8, recallRes.hits.length)} hits` });
+          console.log('[Mission] Pre-seeded planning with recall_memory hits');
+        }
+      } catch (e) {
+        console.warn('[Mission] recall_memory failed during mission startup:', e);
+      }
       const backlog = await this.planBacklog(objective);
       if (MissionRegistry.cancelRequested) { MissionRegistry.finish(); return; }
       if (backlog.length === 0) {
         MissionRegistry.finish();
+        graceMemory.completeWorkspace('failed', 'Mission planning produced no backlog');
         announce("I couldn't put together a concrete plan — try making the objective a bit more specific.");
         return;
       }
       MissionRegistry.setBacklog(backlog);
+      graceMemory.updateScratchpad({
+        objective,
+        status: 'active',
+        plan: backlog,
+        currentStep: backlog[0] || 'starting mission',
+        summary: `Mission backlog ready with ${backlog.length} item(s)`,
+      });
       this.writeMissionProgress();
       console.log(`[Mission] 📋 backlog (${backlog.length}):\n - ${backlog.join('\n - ')}`);
       announce(`Plan's ready: ${backlog.length} items on the list, and I've written it to the progress file. I'll build them one at a time now — say 'status', 'pause' or 'stop' any time.`);
@@ -768,12 +930,43 @@ export class OllamaLLM {
         if (MissionRegistry.cancelRequested) break;
         const item = MissionRegistry.nextItem();
         if (!item) break;   // backlog drained
-        MissionRegistry.phase(`building: ${item.slice(0, 60)}`);
-        console.log(`[Mission] 🔨 item ${i + 1}: ${item}`);
-        const res = await this.buildOneTool(item, objective);
+
+        const match = item.match(/^\[(task|tool)\]\s*([^:]+):\s*(.*)$/i);
+        const kind = match ? match[1].toLowerCase() : 'tool';
+        const name = match ? match[2].trim() : item;
+        const purpose = match ? match[3].trim() : '';
+
+        MissionRegistry.phase(`${kind === 'task' ? 'executing' : 'building'}: ${name.slice(0, 60)}`);
+        graceMemory.updateScratchpad({
+          status: 'active',
+          currentStep: item,
+          notes: [`Mission item ${i + 1}: ${item}`],
+        });
+        console.log(`[Mission] 🔨 item ${i + 1} (${kind}): ${name}`);
+
+        let res: { outcome: 'built' | 'pending' | 'failed'; note: string };
+        if (kind === 'task') {
+          const success = await this.runBackgroundTask(`Task: ${name}. Purpose: ${purpose}. Context/Objective: ${objective}`);
+          res = {
+            outcome: success ? 'built' : 'failed',
+            note: success ? `✓ executed task: ${name}` : `✗ task failed: ${name}`,
+          };
+        } else {
+          res = await this.buildOneTool(item, objective);
+        }
+
         if (MissionRegistry.cancelRequested) break;
         if (res.outcome === 'built') {
-          MissionRegistry.completeCurrent(res.note);
+          // If there is a pending verification entry and no verified entry, move to pending instead of completing.
+          const ws = graceMemory.getActiveWorkspace();
+          const verifs = ws?.verification ?? [];
+          const hasPending = verifs.some(v => typeof v === 'string' && v.startsWith('pending:'));
+          const hasVerified = verifs.some(v => typeof v === 'string' && v.startsWith('verified:'));
+          if (hasPending && !hasVerified) {
+            MissionRegistry.pendingCurrent(`${res.note} (awaiting verification)`);
+          } else {
+            MissionRegistry.completeCurrent(res.note);
+          }
           // Auto-commit the new tool to her own branch (no-op/warn if not on grace/*).
           if (!gitDisabled) {
             const commit: any = await runTool('git_commit', { message: res.note.replace(/^✓\s*/, '') });
@@ -800,6 +993,7 @@ export class OllamaLLM {
         ? `Stopped. I built ${built} tool${built === 1 ? '' : 's'}${pending ? `, ${pending} waiting for your go-ahead` : ''} in ${mins} minutes.`
         : `Mission done: ${built} tool${built === 1 ? '' : 's'} built${pending ? `, ${pending} waiting for your approval` : ''}${failed ? `, ${failed} failed` : ''}, in ${mins} minutes.`;
       console.log(`[Mission] ✓ ${summary}`);
+      graceMemory.completeWorkspace(MissionRegistry.cancelRequested ? 'cancelled' : 'done', summary);
       MissionRegistry.finish();
       this.writeMissionProgress();
       if (this.missionProgressPath) console.log(`[Mission] 📄 progress saved: ${this.missionProgressPath}`);
@@ -808,24 +1002,27 @@ export class OllamaLLM {
     } catch (err) {
       MissionRegistry.finish();
       if (MissionRegistry.cancelRequested || this.turnCancelled || /abort/i.test(String(err))) {
+        graceMemory.completeWorkspace('cancelled', 'cancelled by Mikkel');
         console.log('[Mission] ⏹ aborted (barge-in)');
         return;
       }
+      graceMemory.completeWorkspace('failed', String(err));
       console.error('[Mission] error:', err);
       announce(`I ran into a problem with the mission: ${err}`);
     }
   }
 
   // Plan phase: a short agentic loop that may research (web_search/fetch_url), then emits a
-  // backlog as a JSON array. Returns one descriptive line per item ("name: purpose").
+  // backlog as a JSON array. Returns one descriptive line per item ("[task|tool] name: purpose").
   private async planBacklog(objective: string): Promise<string[]> {
     const planSys = `${currentSystemPrompt()}\n\nMISSION PLANNING MODE: You are planning a long autonomous build mission. ` +
       `Follow the steps in the OBJECTIVE exactly — if it asks you to write notes/analysis to files first, DO that using write_file before proposing the backlog (you may use any tools: write_file, web_search, fetch_url, list_dir, read_file). ` +
-      `Then propose a backlog of CONCRETE, distinct, buildable tools, each with a clear single purpose. AVOID duplicating tools you already have (listed above). ` +
-      `ORDER the backlog so the tools that need NO input from Mikkel come FIRST (pure-compute / read-only that auto-promote), and tools needing his involvement (OAuth, API keys, secrets, accounts) come LAST. ` +
+      `Then propose a backlog of CONCRETE, distinct work items. A work item can be a "task" (a one-off action like researching, consolidating information, or generating notes/plans) or a "tool" (a reusable TypeScript helper created via create_tool). ` +
+      `AVOID duplicating tools you already have (listed above). ` +
+      `ORDER the backlog logically (e.g. research/planning tasks first, then tools). ` +
       `You do NOT need a tool for logging mission progress — that is handled automatically — so do not put one on the backlog. ` +
       `When ready, reply with JSON: ` +
-      `{"thought":"...","tool":null,"done":true,"backlog":[{"name":"snake_case_name","purpose":"one concise line"}, ...]}. ` +
+      `{"thought":"...","tool":null,"done":true,"backlog":[{"name":"item_name","purpose":"one concise line","kind":"task" | "tool"}, ...]}. ` +
       `Aim for a generous list if the objective implies many (e.g. 20+).`;
     const work: Array<{ role: string; content: string }> = [{ role: 'user',
       content: `OBJECTIVE: ${objective}\n\nResearch if useful, then output the backlog JSON as instructed.` }];
@@ -843,7 +1040,14 @@ export class OllamaLLM {
       const raw = tryJson(reply);
       if (raw && Array.isArray(raw.backlog) && raw.backlog.length) {
         return raw.backlog
-          .map((b: any) => typeof b === 'string' ? b : (b && b.name ? `${b.name}: ${b.purpose ?? ''}`.trim() : ''))
+          .map((b: any) => {
+            if (typeof b === 'string') return b;
+            if (b && b.name) {
+              const kind = b.kind === 'task' ? 'task' : 'tool';
+              return `[${kind}] ${b.name}: ${b.purpose ?? ''}`.trim();
+            }
+            return '';
+          })
           .filter((s: string) => s)
           .slice(0, 80);
       }
@@ -883,6 +1087,8 @@ export class OllamaLLM {
       content: `Build this tool now: ${item}. Check for duplicates first, then write the source and call create_tool.` }];
     const MAX = 8;
     let lastErr = '';
+    let lastErrSig = '';
+    let consecutiveStrikes = 0;
     for (let step = 0; step < MAX; step++) {
       await this.waitWhilePaused(() => MissionRegistry.paused, () => MissionRegistry.cancelRequested);
       if (MissionRegistry.cancelRequested) return { outcome: 'failed', note: `stopped before finishing ${item}` };
@@ -907,6 +1113,12 @@ export class OllamaLLM {
         }
         // Sandbox failed — feed the error back for a fix.
         lastErr = String(res?.error || 'unknown sandbox error').slice(0, 300);
+        const errSig = lastErr.replace(/TS\d+/g, 'TS###').replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 180);
+        consecutiveStrikes = errSig === lastErrSig ? consecutiveStrikes + 1 : 1;
+        lastErrSig = errSig;
+        if (consecutiveStrikes >= 3) {
+          return { outcome: 'failed', note: `✗ ${item}: the same sandbox/typecheck error repeated 3 times (${errSig}). I stopped the loop and need a different strategy or your help.` };
+        }
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content: `create_tool failed: ${lastErr}\nFix the TypeScript source based on this error and call create_tool again.` });
         continue;
@@ -941,8 +1153,9 @@ export class OllamaLLM {
     userText: string,
     history: Array<{ role: string; content: string }> = [],
   ): Promise<{ text: string; tokens?: number }> {
+    const prompt = await promptWithMemory(currentSystemPrompt(), userText);
     const messages: OllamaMessage[] = [
-      { role: 'system', content: currentSystemPrompt() },
+      { role: 'system', content: prompt },
       // Inject conversation history
       ...history.map(h => ({
         role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',

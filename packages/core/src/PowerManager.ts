@@ -19,7 +19,18 @@
 //   fullscreen exits.
 // ─────────────────────────────────────────────
 
-import { powerMonitor } from 'electron';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+let powerMonitor: any;
+try {
+  powerMonitor = require('electron')?.powerMonitor;
+} catch {
+  // Not running inside Electron (e.g., running node scripts). Provide a safe stub.
+  powerMonitor = {
+    isOnBatteryPower: () => false,
+    on: () => {},
+  };
+}
 import { bus } from './EventBus.js';
 import type { GracePowerState } from '@grace/shared';
 

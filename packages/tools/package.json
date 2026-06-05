@@ -9,6 +9,9 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@grace/core": "*"
+  },
   "devDependencies": {
     "typescript": "*"
   }
