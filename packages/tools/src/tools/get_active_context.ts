@@ -1,9 +1,12 @@
 // get_active_context — what is the user doing right now?
 //
 // Runs a live query for the foreground window (app name, title, fullscreen) and
-// optionally grabs the currently selected text by simulating Ctrl+C and reading
-// the clipboard. The prior clipboard contents are saved and restored so we don't
-// clobber whatever the user had copied.
+// optionally reads the currently selected text. Selection is read directly via
+// UI Automation's TextPattern — NOT by simulating Ctrl+C. Simulating ^c globally
+// is dangerous: SendKeys delivers the keystroke to whatever window has focus, and
+// if that is a console (e.g. the terminal running Grace) the Ctrl+C arrives as
+// SIGINT and kills the process. TextPattern reads the selection with zero input
+// simulation and zero clipboard clobbering.
 
 import { registerTool } from '../registry.js';
 import { runPowerShell } from '../lib/powershell.js';
@@ -50,28 +53,47 @@ if ($bw -gt 0) {
 ConvertTo-Json @{ app=$name; title=$title; isFullscreen=$fs } -Compress
 `.trim();
 
-// PowerShell: send Ctrl+C to the foreground window so its selection lands on the
-// clipboard. A short sleep lets the target app finish the copy.
-const COPY_SELECTION_PS = `
+// PowerShell: read the selected text from the focused element via UI Automation's
+// TextPattern. No keystrokes, no clipboard — completely safe. Returns {} JSON with
+// "selection" (empty if the element doesn't expose a text selection).
+const SELECTION_PS = `
 $ProgressPreference = 'SilentlyContinue'
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait("^c")
-Start-Sleep -Milliseconds 180
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+$sel = ""
+$supported = $false
+if ($fe) {
+  $obj = $null
+  if ($fe.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$obj)) {
+    $supported = $true
+    $tp = $obj -as [System.Windows.Automation.TextPattern]
+    try {
+      $ranges = $tp.GetSelection()
+      if ($ranges -and $ranges.Length -gt 0) {
+        $parts = @()
+        foreach ($rng in $ranges) { $parts += $rng.GetText(-1) }
+        $sel = ($parts -join "")
+      }
+    } catch { }
+  }
+}
+ConvertTo-Json @{ selection=$sel; supported=$supported } -Compress
 `.trim();
 
 registerTool({
   name: 'get_active_context',
   description:
     'Get what the user is currently doing: active app name, window title, and fullscreen state. ' +
-    'Optionally grab the currently selected text (simulates Ctrl+C, reads the clipboard, then restores it). ' +
+    'Optionally read the currently selected text (via UI Automation — no keystrokes, safe). ' +
     'Use to understand the user\'s current context before acting.',
   params: {
     include_selection: {
       type: 'boolean',
-      description: 'If true, simulate Ctrl+C and read the selected text via the clipboard. Default false.',
+      description: 'If true, also read the currently selected text from the focused control. Default false.',
     },
   },
-  async run(args, ctx) {
+  async run(args) {
     const result: {
       app: string; title: string; isFullscreen: boolean;
       selectedText?: string; selectionNote?: string;
@@ -91,27 +113,21 @@ registerTool({
       return { error: `Unexpected active-window output: ${stdout.trim().slice(0, 200)}` };
     }
 
-    // ── 2. Optional selected-text capture (clipboard-based) ──────────────────
-    if (args.include_selection && ctx) {
+    // ── 2. Optional selected-text capture (UI Automation TextPattern) ────────
+    if (args.include_selection) {
       try {
-        const before = (await ctx.callTool('clipboard_read', {})) as { text?: string; error?: string };
-        const priorClip = before?.text ?? '';
-
-        await runPowerShell(COPY_SELECTION_PS);
-
-        const after = (await ctx.callTool('clipboard_read', {})) as { text?: string; error?: string };
-        const sel = (after?.text ?? '').trim();
-
-        // Restore the user's original clipboard (text only).
-        await ctx.callTool('clipboard_write', { text: priorClip });
-
-        if (sel && sel !== priorClip.trim()) {
-          result.selectedText = sel;
+        const r = await runPowerShell(SELECTION_PS);
+        if (r.code === 0) {
+          const info = JSON.parse(r.stdout.trim()) as { selection?: string; supported?: boolean };
+          const sel = (info.selection ?? '').trim();
+          if (sel) result.selectedText = sel;
+          else if (!info.supported) result.selectionNote = 'The focused control does not expose a text selection.';
+          else result.selectionNote = 'Nothing is currently selected.';
         } else {
-          result.selectionNote = 'No new selection detected (nothing was selected, or the app ignored Ctrl+C).';
+          result.selectionNote = `Selection read failed: ${r.stderr || `exit ${r.code}`}`;
         }
       } catch (e) {
-        result.selectionNote = `Selection capture failed: ${String(e)}`;
+        result.selectionNote = `Selection read failed: ${String(e)}`;
       }
     }
 
