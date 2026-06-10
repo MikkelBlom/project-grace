@@ -25,6 +25,9 @@ $env:GRACE_STT_BACKEND   = "openvino"
 #   ...-large-v3-fp16 = ~1.8s, best accuracy
 $env:GRACE_OV_MODEL      = "$graceRoot\models\ov-whisper-large-v3-turbo-fp16"
 $env:GRACE_OV_DEVICE     = "GPU.0"
+# Beam search width: 1=greedy/fastest, 2=a bit slower but more accurate on hard
+# (far-field / fast Danish) audio. Set to 2 while the mic is the weak link.
+$env:GRACE_OV_NUM_BEAMS  = "2"
 
 # --- Mikrofon-valg ---------------------------------------------------------
 # GRACE_MIC_NAME = del af enhedsnavnet (case-insensitivt). Tom "" = Windows default.

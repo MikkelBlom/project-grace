@@ -102,10 +102,6 @@ const SKIP_RE = /^[\s.<>*"'`]*skip[\s.<>*"'`]*$/i;
 // Tools that change the filesystem — after one runs, Grace must verify before claiming success.
 const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'move_file', 'delete_file']);
 
-// "let me check…", "I'll open…", "jeg vil finde…" — intent narration with an action verb. When the
-// model emits this with NO tool call, nudge it to actually act (or admit it can't) instead of stalling.
-const INTENT_RE = /\b(let me|i'?ll|i will|i am going to|i'?m going to|lad mig|jeg vil(?: gerne)?|jeg skal)\b[^.?!]{0,40}\b(check|look|see|find|grab|open|read|search|create|make|build|get|take|do|fix|update|write|pull|dig|inspect|verify|run|tjekke?|se|finde|kigge?|åbne?|læse?|lave|hente|opdatere?|køre|søge)\b/i;
-
 // Real machine facts injected into the prompt so Grace stops guessing paths / usernames.
 function describeEnvironment(): string {
   let home = '', user = '';
@@ -184,7 +180,18 @@ const COGNITIVE_GUIDANCE = [
   '- If the same build or typecheck error repeats, stop rerunning the same attempt. Reflect, change strategy, and escalate only after you have tried a meaningfully different fix.',
 ].join('\n');
 
-const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE, COGNITIVE_GUIDANCE].filter(Boolean).join('\n\n');
+const INPUT_AND_ACTION_GUIDANCE = [
+  'UNDERSTANDING SPEECH INPUT (it is often mis-heard):',
+  '- Your input is speech-to-text and is frequently garbled — especially names, English/technical terms, and anything said quickly or far from the mic. The literal words may be wrong.',
+  '- Resolve odd or ambiguous input against the CONVERSATION and YOUR OWN recent replies. If you just mentioned "T4G1 Shop" and the next input sounds like "T4G Edge Shop", assume the user means what you just discussed — do NOT chase the literal misheard string.',
+  '- Prefer the most contextually obvious interpretation. Only ask for clarification when you genuinely cannot tell what was meant.',
+  '',
+  'ACTING vs NARRATING:',
+  '- If you are going to do something, emit the tool call in the SAME response. Never say "let me check…", "I\'ll look…", or "jeg finder…" without the matching tool call.',
+  '- If no tool can do it, say so plainly. Do not narrate an action you are not actually taking.',
+].join('\n');
+
+const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE, COGNITIVE_GUIDANCE, INPUT_AND_ACTION_GUIDANCE].filter(Boolean).join('\n\n');
 function currentSystemPrompt(): string {
   return [STATIC_PROMPT, describeTools()].filter(Boolean).join('\n\n');
 }
@@ -422,7 +429,6 @@ export class OllamaLLM {
         const MAX_STEPS = 8;   // cap, not a target — she stops early when done; tokens are free (local)
         let allSpoken: string[] = [];
         let lastToolNote = '';
-        let narrationNudged = false;
 
         let step = 0;
         for (; step < MAX_STEPS; step++) {
@@ -439,20 +445,12 @@ export class OllamaLLM {
           }
 
           if (call.calls.length === 0) {
+            // No tool call → this is her answer. We trust the structured schema instead of
+            // regex-sniffing the prose: if she means to act she emits a tool call (the schema
+            // makes that trivial), and the "act, don't narrate" rule lives in the system prompt.
+            // The old INTENT_RE heuristic misfired on idioms ("I'll take that as a win") and
+            // discarded good replies — pattern-matching intent out of free text is the wrong tool.
             const spoke = call.speak?.trim() || '';
-            // Narrated intent but called no tool ("let me check…") — nudge her to act, once.
-            // Skip when she marked the turn done: a finished answer like "I'll take that as
-            // a win" is NOT stalled tool-intent, and nudging it discards a good reply (and
-            // made her blurt unrelated "no more narrating intent" meta-replies).
-            if (!narrationNudged && !call.done && INTENT_RE.test(spoke)) {
-              narrationNudged = true;
-              work.push({ role: 'assistant', content: reply });
-              work.push({ role: 'user', content:
-                'You said you would do something but called no tool. If a tool can do it, output the tool call NOW. ' +
-                'If no tool can, tell Mikkel plainly you cannot — do not just narrate intent.' });
-              continue;
-            }
-            // Otherwise this is her final answer for the turn.
             if (spoke) allSpoken.push(spoke);
             break;
           }
