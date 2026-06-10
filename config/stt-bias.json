@@ -1,0 +1,10 @@
+{
+  "_comment": "STT biasing for Grace. 'initial_prompt' primes Whisper with context (style + that Mikkel mixes Danish with English tech terms). 'hotwords' is a vocabulary list that nudges Whisper toward these exact spellings when it hears something close. Keep the combined size modest (~Whisper caps the prompt around 224 tokens) — prioritise words that get mis-heard. Edit freely; no rebuild needed, the STT server reads this on startup.",
+  "initial_prompt": "Samtale med Grace, en dansk AI-assistent. Hej Grace. Mikkel taler dansk, ofte blandet med engelske tekniske og kode-relaterede ord.",
+  "hotwords": [
+    "Grace", "Claude", "Gemini", "ChatGPT", "OpenAI", "Anthropic", "Ollama", "Copilot",
+    "Python", "TypeScript", "JavaScript", "React", "Node", "Electron", "GitHub", "Docker", "Notes", "Obsidian",
+    "Kubernetes", "API", "endpoint", "repository", "commit", "prompt", "token", "embedding",
+    "VRAM", "GPU", "NPU", "CUDA", "OpenVINO", "Whisper", "Kokoro", "gemma", "nomic", "Røde Kors"
+  ]
+}

@@ -23,6 +23,15 @@ logs/
 data/
 models/
 
+# Python bytecode
+__pycache__/
+
+# Offline pip/model download cache (large, regenerable)
+offline-cache/
+
+# Test/benchmark audio clips (binary, transient)
+*.wav
+
 # Grace runtime data (on new machine)
 ~/Grace/
 

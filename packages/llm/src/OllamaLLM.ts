@@ -190,36 +190,42 @@ function currentSystemPrompt(): string {
 }
 
 function inferPromptQuery(messages: Array<{ role: string; content: string }>): string {
-  const userMessage = [...messages].reverse().find((message) => message.role !== 'system')?.content ?? '';
-  return String(userMessage ?? '').trim();
+  const userMessage = [...messages].reverse().find((message) => message.role === 'user' && !message.content.startsWith('CONTEXT —'))?.content ?? '';
+  return String(userMessage ?? '').trim().slice(0, 1000);
 }
 
-async function promptWithMemory(systemPrompt: string, query: string): Promise<string> {
+async function promptWithMemory(systemPrompt: string, query: string): Promise<{ staticPrompt: string, dynamicPrompt: string }> {
   const blocks = await graceMemory.buildPromptBlocks(query || 'current turn');
-  // Also attempt an explicit recall via the recall_memory tool for a compact prioritized hit list
+  // The automatic recall_memory tool execution has been removed to prevent Model Thrashing.
+  // The LLM will now manually invoke recall_memory when necessary.
+
+  // Inject LIVE CONTEXT (Active Window)
   try {
-    const recall = await runTool('recall_memory', { query: query || 'current turn', limit: 6, recencyWeight: 0.3 });
-    if (recall && typeof recall === 'object' && (recall as any).ok) {
-      const hits = Array.isArray((recall as any).hits) ? (recall as any).hits as any[] : [];
-      if (hits.length) {
-        const lines = ['RECALL TOOL RESULTS — prioritized memory hits:'];
-        for (let i = 0; i < Math.min(6, hits.length); i++) {
-          const h = hits[i];
-          const prefix = `#${i + 1} [${h.namespace}/${h.kind}]`;
-          const src = h.source ? ` source=${h.source}` : '';
-          const obj = h.objective ? ` objective=${h.objective}` : '';
-          const tags = h.tags && h.tags.length ? ` tags=${h.tags.join(',')}` : '';
-          lines.push(`- ${prefix} ${String(h.summary ?? '').slice(0, 200)}${src}${obj}${tags}`);
-        }
-        blocks.unshift(lines.join('\n'));
+    const activeCtx = await runTool('get_active_context', { include_selection: true });
+    if (activeCtx && typeof activeCtx === 'object' && !('error' in activeCtx)) {
+      const { app, title, selectionNote } = activeCtx as any;
+      const ctxStrings = ['LIVE CONTEXT — Mikkel\'s current active screen/window:'];
+      if (app || title) ctxStrings.push(`- Application: ${app || 'Unknown'} | Title: ${title || 'Unknown'}`);
+      if (selectionNote && selectionNote !== 'Nothing is currently selected.') {
+        ctxStrings.push(`- Screen Selection: ${selectionNote}`);
+      }
+      blocks.unshift(ctxStrings.join('\n'));
+    }
+  } catch (e) { console.warn('[OllamaLLM] get_active_context injection failed:', e); }
+
+  // Inject LIVE CONTEXT (Clipboard)
+  try {
+    const clipboard = await runTool('clipboard_read', {});
+    if (clipboard && typeof clipboard === 'object' && (clipboard as any).text) {
+      let text = (clipboard as any).text.trim();
+      if (text) {
+        if (text.length > 1000) text = text.slice(0, 1000) + '\n... [truncated]';
+        blocks.unshift(`LIVE CONTEXT — Mikkel's current clipboard content:\n${text}`);
       }
     }
-  } catch (e) {
-    // don't fail prompt composition if recall tool errors
-    console.warn('[OllamaLLM] recall_memory failed:', e);
-  }
+  } catch (e) { console.warn('[OllamaLLM] clipboard_read injection failed:', e); }
 
-  return [systemPrompt, ...blocks].filter(Boolean).join('\n\n');
+  return { staticPrompt: systemPrompt, dynamicPrompt: blocks.filter(Boolean).join('\n\n') };
 }
 
 interface OllamaMessage {
@@ -314,24 +320,31 @@ export class OllamaLLM {
   // ── Availability check ───────────────────────
 
   private async checkAvailability(): Promise<void> {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        const data = await res.json() as { models: Array<{ name: string }> };
-        const models = data.models?.map((m: { name: string }) => m.name) ?? [];
-        const hasModel = models.some((m: string) => m.startsWith(this.model.split(':')[0]!));
+    // Poll until Ollama answers. start-grace.ps1 now launches `ollama serve` in parallel
+    // (non-blocking), so it may come online a few seconds AFTER Grace — don't give up on
+    // the first try and permanently disable the LLM (that caused silent no-reply startups).
+    const MAX_ATTEMPTS = 45;   // ~90s at 2s spacing
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const res = await fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const data = await res.json() as { models: Array<{ name: string }> };
+          const models = data.models?.map((m: { name: string }) => m.name) ?? [];
+          const hasModel = models.some((m: string) => m.startsWith(this.model.split(':')[0]!));
 
-        if (hasModel) {
-          this.isAvailable = true;
-          console.log(`[OllamaLLM] ✅ Online — model: ${this.model}`);
-          bus.emit('overlay:notification', {
-            text: `Indlæser ${this.model} i VRAM...`,
-            level: 'info', duration: 5000,
-          });
-          // Warm up: send a tiny prompt so Ollama loads the model into VRAM now,
-          // not on the user's first utterance (31B models take 60-120s to load).
-          this.warmUp();
-        } else {
+          if (hasModel) {
+            this.isAvailable = true;
+            console.log(`[OllamaLLM] ✅ Online — model: ${this.model}`);
+            bus.emit('overlay:notification', {
+              text: `Indlæser ${this.model} i VRAM...`,
+              level: 'info', duration: 5000,
+            });
+            // Warm up: send a tiny prompt so Ollama loads the model into VRAM now,
+            // not on the user's first utterance (big models take time to load).
+            this.warmUp();
+            return;
+          }
+          // Reachable but the model isn't pulled — retrying won't fix that.
           console.warn(`[OllamaLLM] ⚠️  Ollama kører, men ${this.model} er ikke pulled`);
           console.warn(`[OllamaLLM]    Kør: ollama pull ${this.model}`);
           console.warn(`[OllamaLLM]    Tilgængelige: ${models.join(', ')}`);
@@ -339,12 +352,15 @@ export class OllamaLLM {
             text: `⚠️ ${this.model} ikke fundet — kør: ollama pull ${this.model}`,
             level: 'warning', duration: 8000,
           });
+          return;
         }
+      } catch {
+        // Not up yet — keep waiting.
       }
-    } catch {
-      console.warn(`[OllamaLLM] ⚠️  Ollama ikke tilgængeligt på ${this.baseUrl}`);
-      console.warn('[OllamaLLM]    Start Ollama: winget install Ollama.Ollama && ollama serve');
+      if (attempt === 1) console.log('[OllamaLLM] Venter på at Ollama kommer online...');
+      await new Promise((r) => setTimeout(r, 2000));
     }
+    console.warn(`[OllamaLLM] ⚠️  Ollama ikke tilgængeligt på ${this.baseUrl} efter 90s — LLM deaktiveret indtil genstart.`);
   }
 
   // ── Warm-up ──────────────────────────────────
@@ -416,6 +432,7 @@ export class OllamaLLM {
           const call = parseToolCall(reply);
           
           if (!call) {
+            console.error(`\n[OllamaLLM] ❌ JSON PARSE FAILED: Modellen svarede ikke med gyldig JSON.\n[Raw Reply]: ${reply}\n`);
             work.push({ role: 'assistant', content: reply });
             work.push({ role: 'user', content: 'You MUST output valid JSON matching {"thought":"...","tool":"...","args":{...},"speak":"...","done":false}. Do not output plain text.' });
             continue;
@@ -424,7 +441,10 @@ export class OllamaLLM {
           if (call.calls.length === 0) {
             const spoke = call.speak?.trim() || '';
             // Narrated intent but called no tool ("let me check…") — nudge her to act, once.
-            if (!narrationNudged && INTENT_RE.test(spoke)) {
+            // Skip when she marked the turn done: a finished answer like "I'll take that as
+            // a win" is NOT stalled tool-intent, and nudging it discards a good reply (and
+            // made her blurt unrelated "no more narrating intent" meta-replies).
+            if (!narrationNudged && !call.done && INTENT_RE.test(spoke)) {
               narrationNudged = true;
               work.push({ role: 'assistant', content: reply });
               work.push({ role: 'user', content:
@@ -575,7 +595,19 @@ export class OllamaLLM {
       role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
       content: m.content,
     }));
-    const prompt = await promptWithMemory(systemPrompt, inferPromptQuery(norm));
+    const promptObj = await promptWithMemory(systemPrompt, inferPromptQuery(norm));
+    const messagesToSend: OllamaMessage[] = [{ role: 'system', content: promptObj.staticPrompt }];
+    
+    // To preserve Ollama's prefix KV caching, the ever-changing dynamic prompt (Live Context)
+    // is injected AFTER the historical turns, right before the current user message.
+    if (norm.length > 0) {
+      messagesToSend.push(...norm.slice(0, -1) as OllamaMessage[]);
+      if (promptObj.dynamicPrompt) messagesToSend.push({ role: 'system', content: promptObj.dynamicPrompt });
+      messagesToSend.push(norm[norm.length - 1] as OllamaMessage);
+    } else {
+      if (promptObj.dynamicPrompt) messagesToSend.push({ role: 'system', content: promptObj.dynamicPrompt });
+    }
+
     // Use an abortable signal stored on the instance so control:stop can end generation
     // mid-stream (barge-in), plus a manual 180s timeout fallback.
     const ac = new AbortController();
@@ -587,16 +619,40 @@ export class OllamaLLM {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: this.model,
-          messages: [{ role: 'system', content: prompt }, ...norm],
+          messages: messagesToSend,
           stream: false,
           think: false,
-          format: 'json',
-          options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 4096 },
+          format: {
+            type: "object",
+            properties: {
+              thought: { type: "string" },
+              tool: { type: ["string", "null"] },
+              args: { type: "object" },
+              tools: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { tool: { type: "string" }, args: { type: "object" } },
+                  required: ["tool", "args"]
+                }
+              },
+              speak: { type: "string" },
+              done: { type: "boolean" }
+            },
+            required: ["thought", "speak", "done"]
+          },
+          options: { temperature: 0.5, top_p: 0.9, num_ctx: 32768, num_predict: 4096, num_gpu: 99 },
+          keep_alive: -1,
         }),
         signal: ac.signal,
       });
       if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
-      const data = await res.json() as { message?: { content?: string } };
+      const data = await res.json() as any;
+      const loadMs = data.load_duration ? Math.round(data.load_duration / 1e6) : 0;
+      const evalMs = data.prompt_eval_duration ? Math.round(data.prompt_eval_duration / 1e6) : 0;
+      const genMs = data.eval_duration ? Math.round(data.eval_duration / 1e6) : 0;
+      const tps = (data.eval_count && genMs > 0) ? (data.eval_count / (genMs / 1000)).toFixed(1) : '0';
+      console.log(`[OllamaLLM] 📊 Telemetry: Load=${loadMs}ms | Eval=${evalMs}ms | Gen=${genMs}ms (${tps} tps)`);
       return data.message?.content?.trim() ?? '';
     } finally {
       clearTimeout(timer);
@@ -687,7 +743,7 @@ export class OllamaLLM {
         const call = parseToolCall(reply);
 
         if (!call) {
-          console.warn(`[Task] ⚠️ Invalid JSON reply from model: ${reply}`);
+          console.error(`\n[Task] ❌ JSON PARSE FAILED: Modellen svarede ikke med gyldig JSON i task mode.\n[Raw Reply]: ${reply}\n`);
           work.push({ role: 'assistant', content: reply });
           work.push({ role: 'user', content: 'You MUST output valid JSON matching {"thought":"...","tool":"...","args":{...},"speak":"...","done":false}.' });
           continue;
@@ -1096,6 +1152,7 @@ export class OllamaLLM {
       if (this.turnCancelled || MissionRegistry.cancelRequested) return { outcome: 'failed', note: `stopped during ${item}` };
       const call = parseToolCall(reply);
       if (!call) {
+        console.error(`\n[Mission] ❌ JSON PARSE FAILED: Modellen svarede ikke med gyldig JSON i mission mode.\n[Raw Reply]: ${reply}\n`);
         work.push({ role: 'assistant', content: reply });
         work.push({ role: 'user', content: 'Output valid JSON {"thought","tool","args","speak","done"}.' });
         continue;
@@ -1153,16 +1210,20 @@ export class OllamaLLM {
     userText: string,
     history: Array<{ role: string; content: string }> = [],
   ): Promise<{ text: string; tokens?: number }> {
-    const prompt = await promptWithMemory(currentSystemPrompt(), userText);
-    const messages: OllamaMessage[] = [
-      { role: 'system', content: prompt },
-      // Inject conversation history
-      ...history.map(h => ({
-        role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
-        content: h.content,
-      })),
-      { role: 'user', content: userText },
-    ];
+    const promptObj = await promptWithMemory(currentSystemPrompt(), userText);
+    const messages: OllamaMessage[] = [{ role: 'system', content: promptObj.staticPrompt }];
+    
+    if (history.length > 0) {
+      messages.push(
+        ...history.map(h => ({
+          role: (h.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+          content: h.content,
+        }))
+      );
+    }
+    
+    if (promptObj.dynamicPrompt) messages.push({ role: 'system', content: promptObj.dynamicPrompt });
+    messages.push({ role: 'user', content: userText });
 
     const body = JSON.stringify({
       model: this.model,
@@ -1172,6 +1233,7 @@ export class OllamaLLM {
       // message.content (speakable) rather than message.thinking, and to keep
       // voice latency low. Re-enable per-call for hard reasoning tasks later.
       think: false,
+      keep_alive: -1,
       options: {
         temperature: 0.7,
         top_p: 0.9,
@@ -1232,10 +1294,21 @@ export class OllamaLLM {
       const lines = decoder.decode(value).split('\n').filter(Boolean);
       for (const line of lines) {
         try {
-          const json = JSON.parse(line) as OllamaChatResponse;
-          const chunk = json.message?.content ?? '';
-          if (chunk) yield chunk;
-          if (json.done) return;
+          const data = JSON.parse(line);
+
+          if (data.done) {
+            // Log telemetry if available
+            const loadMs = data.load_duration ? Math.round(data.load_duration / 1e6) : 0;
+            const evalMs = data.prompt_eval_duration ? Math.round(data.prompt_eval_duration / 1e6) : 0;
+            const genMs = data.eval_duration ? Math.round(data.eval_duration / 1e6) : 0;
+            const tps = (data.eval_count && genMs > 0) ? (data.eval_count / (genMs / 1000)).toFixed(1) : '0';
+            console.log(`[OllamaLLM] 📊 Telemetry: Load=${loadMs}ms | Eval=${evalMs}ms | Gen=${genMs}ms (${tps} tps)`);
+            return;
+          }
+
+          if (data.message?.content) {
+            yield data.message.content;
+          }
         } catch { /* incomplete chunk */ }
       }
     }

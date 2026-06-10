@@ -16,6 +16,16 @@ $env:GRACE_WHISPER_MODEL = "large-v3"
 $env:GRACE_WHISPER_LANG  = "da"
 $env:GRACE_PYTHON_CMD    = "py"
 
+# --- STT backend -----------------------------------------------------------
+# 'openvino' runs Whisper on the Intel Arc iGPU (GPU.0), freeing ~3GB on the RTX
+# so gemma4:26b stops thrashing. 'faster-whisper' = old CUDA path (fallback).
+$env:GRACE_STT_BACKEND   = "openvino"
+# Which converted model the OpenVINO backend loads:
+#   ...-turbo-fp16 = sub-700ms, accuracy ~= old CUDA   (recommended)
+#   ...-large-v3-fp16 = ~1.8s, best accuracy
+$env:GRACE_OV_MODEL      = "$graceRoot\models\ov-whisper-large-v3-turbo-fp16"
+$env:GRACE_OV_DEVICE     = "GPU.0"
+
 # --- Mikrofon-valg ---------------------------------------------------------
 # GRACE_MIC_NAME = del af enhedsnavnet (case-insensitivt). Tom "" = Windows default.
 # !! BLUETOOTH: bruger man Buds4 som MIKROFON, tvinger Windows dem i "headset"-tilstand
@@ -28,6 +38,23 @@ $env:GRACE_MIC_NAME      = "Realtek"
 
 Write-Host ""
 Write-Host "[Grace] Starting up..." -ForegroundColor Cyan
+
+# --- Ensure Ollama is running (the LLM backend) ---
+# Without this, Grace launches fine but every reply silently hangs waiting for an
+# Ollama that isn't there. Start it ourselves if the API isn't already answering.
+function Test-Ollama {
+    try { (Invoke-WebRequest -Uri 'http://localhost:11434/api/version' -TimeoutSec 2 -UseBasicParsing).StatusCode -eq 200 }
+    catch { $false }
+}
+if (Test-Ollama) {
+    Write-Host "[Ollama] Already running." -ForegroundColor Gray
+} else {
+    Write-Host "[Ollama] Not running -- starting 'ollama serve' in background..." -ForegroundColor Yellow
+    Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
+    # Don't block startup: Grace's LLM client polls until Ollama answers, so STT/TTS/UI
+    # boot in parallel and only the LLM waits for it.
+    Write-Host "[Ollama] Launched -- Grace will connect once it's online." -ForegroundColor Gray
+}
 
 # --- Start Kokoro TTS server ---
 Write-Host "[Kokoro] Starting TTS server..." -ForegroundColor Gray
@@ -44,24 +71,8 @@ $kokoro = Start-Process -FilePath "py" -ArgumentList $kokoroArgs -PassThru -NoNe
     -RedirectStandardOutput "$logsDir\kokoro.log" `
     -RedirectStandardError "$logsDir\kokoro-err.log"
 
-# Wait for Kokoro to be ready (max 10 seconds)
-$ready = $false
-for ($i = 0; $i -lt 40; $i++) {
-    Start-Sleep -Milliseconds 500
-    try {
-        $health = Invoke-RestMethod -Uri "http://localhost:8765/health" -TimeoutSec 1
-        Write-Host "[Kokoro] Ready - engine: $($health.engine), voice: $($health.voice)" -ForegroundColor Green
-        $ready = $true
-        break
-    } catch {
-        # Not ready yet
-    }
-}
-
-if (-not $ready) {
-    Write-Host "[Kokoro] Did not respond - falling back to Windows SAPI" -ForegroundColor Yellow
-}
-
+# Start Grace immediately (Kokoro loads in the background but accepts HTTP instantly)
+Write-Host "[Kokoro] Starting TTS server..." -ForegroundColor Gray
 # --- Start Grace ---
 Write-Host "[Grace]  Starting Electron app..." -ForegroundColor Cyan
 Write-Host ""

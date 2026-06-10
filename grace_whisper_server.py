@@ -28,6 +28,10 @@ import queue
 import time
 import numpy as np
 
+# Silence Intel oneDNN's OpenCL probe spam (harmless CL_INVALID_OPERATION error
+# records) that the OpenVINO GPU plugin triggers on the Arc iGPU.
+os.environ.setdefault('ONEDNN_VERBOSE', '0')
+
 # ── Fix: add nvidia CUDA DLL directories to PATH before importing CTranslate2 ──
 # pip install nvidia-cublas-cu12 puts DLLs in site-packages/nvidia/*/bin/
 # but CTranslate2 won't find them unless they're on PATH.
@@ -50,10 +54,25 @@ _add_nvidia_dlls_to_path()
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_OV_TURBO = os.path.join(SCRIPT_DIR, 'models', 'ov-whisper-large-v3-turbo-fp16')
+
 parser = argparse.ArgumentParser(description='Grace Whisper STT server')
 parser.add_argument('--model',  default='large-v3', help='Whisper model size')
 parser.add_argument('--device', default='cuda',     help='cuda or cpu')
 parser.add_argument('--lang',   default='da',       help='Language code or "auto"')
+# ── Backend selection ──────────────────────────────────────────────────────────
+#   faster-whisper -> CTranslate2 on CUDA (the NVIDIA dGPU)
+#   openvino       -> OpenVINO WhisperPipeline on the Intel Arc iGPU (GPU.0), frees
+#                     ~3GB on the RTX so the 26b LLM stops thrashing. See ai-instructions.
+parser.add_argument('--backend', default=os.environ.get('GRACE_STT_BACKEND', 'faster-whisper'),
+                    choices=['faster-whisper', 'openvino'], help='STT engine')
+parser.add_argument('--ov-model', default=os.environ.get('GRACE_OV_MODEL', _OV_TURBO),
+                    help='OpenVINO IR model dir (openvino backend)')
+parser.add_argument('--ov-device', default=os.environ.get('GRACE_OV_DEVICE', 'GPU.0'),
+                    help='OpenVINO device: GPU.0=Arc iGPU, CPU, NPU')
+parser.add_argument('--ov-num-beams', type=int, default=int(os.environ.get('GRACE_OV_NUM_BEAMS', '1')),
+                    help='Beam width for openvino (1=greedy/fastest, >1=slower+more accurate)')
 parser.add_argument('--sample-rate', type=int, default=16000, help='Audio sample rate')
 parser.add_argument('--chunk-ms',    type=int, default=30,    help='Audio chunk size in ms (ignored — fixed at 512 samples)')
 parser.add_argument('--mic-device',  type=int, default=-1,    help='Sounddevice input device index (-1 = auto)')
@@ -88,6 +107,75 @@ def emit_transcript(text: str, confidence: float, language: str):
 def emit_error(error: str):
     emit({"type": "error", "error": error})
 
+# ── STT biasing (user-editable vocabulary) ─────────────────────────────────────
+# Whisper accepts a text "prompt" it conditions on (raising the prior for those
+# words/spellings) plus a hotwords list. We load both from config/stt-bias.json so
+# Mikkel can grow the vocabulary (Claude, Gemini, tech terms…) without code edits.
+
+def load_stt_bias():
+    default_prompt = ("Samtale med Grace, en dansk AI-assistent. Hej Grace. "
+                      "Mikkel taler dansk, ofte blandet med engelske tekniske ord.")
+    default_hot = ["Grace", "Claude", "Gemini", "ChatGPT", "OpenAI", "Anthropic", "Ollama",
+                   "Python", "TypeScript", "GitHub", "Docker", "API", "prompt", "embedding",
+                   "token", "VRAM", "GPU", "NPU", "OpenVINO", "Whisper", "Kokoro", "gemma", "nomic"]
+    path = os.path.join(SCRIPT_DIR, 'config', 'stt-bias.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        prompt = data.get('initial_prompt') or default_prompt
+        hot = [w for w in (data.get('hotwords') or default_hot) if isinstance(w, str)]
+        print(f"[STT] bias loaded: {len(hot)} hotwords", file=sys.stderr)
+        return prompt, hot
+    except Exception as e:
+        print(f"[STT] bias config not loaded ({e}) — using defaults", file=sys.stderr)
+        return default_prompt, default_hot
+
+BIAS_PROMPT, HOTWORDS = load_stt_bias()
+# faster-whisper conditions on ONE prompt string, so fold the vocabulary into it.
+FW_INITIAL_PROMPT = (f"{BIAS_PROMPT} Ord der ofte forekommer: {', '.join(HOTWORDS)}."
+                     if HOTWORDS else BIAS_PROMPT)
+
+def _compression_ratio(text: str) -> float:
+    """Gzip ratio — high values flag looping/repeated hallucinations."""
+    import zlib
+    b = text.encode('utf-8')
+    return (len(b) / len(zlib.compress(b))) if b else 0.0
+
+# ── OpenVINO backend (Intel Arc iGPU) ──────────────────────────────────────────
+class OpenVinoWhisper:
+    """Whisper via OpenVINO GenAI — runs on the Arc iGPU so the RTX stays free for the LLM."""
+    def __init__(self, model_dir, device, lang, initial_prompt, hotwords, num_beams=1):
+        import openvino_genai as ov_genai
+        self.lang = lang
+        self.pipe = ov_genai.WhisperPipeline(model_dir, device=device)
+        cfg = self.pipe.get_generation_config()
+        cfg.task = "transcribe"
+        if lang and lang != 'auto':
+            cfg.language = f"<|{lang}|>"
+        for attr, val in (("return_timestamps", False), ("initial_prompt", initial_prompt),
+                          ("no_repeat_ngram_size", 4)):
+            try: setattr(cfg, attr, val)
+            except Exception: pass
+        if hotwords:
+            try: cfg.hotwords = " ".join(hotwords)
+            except Exception: pass
+        if num_beams and num_beams > 1:
+            try: cfg.num_beams = num_beams
+            except Exception: pass
+        self.cfg = cfg
+
+    def transcribe(self, audio_np):
+        audio = np.ascontiguousarray(audio_np, dtype=np.float32)
+        try:
+            res = self.pipe.generate(audio, self.cfg)
+        except TypeError:
+            res = self.pipe.generate(audio)
+        text = str(res).strip()
+        lang = self.lang if (self.lang and self.lang != 'auto') else 'da'
+        if text and _compression_ratio(text) > 2.6:   # looping hallucination guard
+            return '', lang, 0.0
+        return text, lang, 0.85
+
 # ── Load models ────────────────────────────────────────────────────────────────
 
 def load_models():
@@ -109,6 +197,22 @@ def load_models():
         emit_error(f"silero-VAD load failed: {e}")
         sys.exit(1)
 
+    # ── OpenVINO backend (Arc iGPU) ──
+    if args.backend == 'openvino':
+        print(f"Loading OpenVINO Whisper ({os.path.basename(args.ov_model)} on {args.ov_device})...", file=sys.stderr)
+        try:
+            backend = OpenVinoWhisper(args.ov_model, args.ov_device, args.lang,
+                                      BIAS_PROMPT, HOTWORDS, args.ov_num_beams)
+            # Warm up now so the device compile (~8-14s) happens at startup, not on the
+            # first utterance. Noise input — we just need to trigger compilation.
+            warm = np.random.default_rng(42).standard_normal(SAMPLE_RATE).astype(np.float32) * 0.05
+            backend.transcribe(warm)
+            print(f"OpenVINO Whisper klar ({os.path.basename(args.ov_model)} / {args.ov_device}).", file=sys.stderr)
+            return vad_model, get_speech_probs, backend
+        except Exception as e:
+            emit_error(f"OpenVINO load failed: {e}")
+            sys.exit(1)
+
     print(f"Loading faster-whisper ({args.model}, {args.device})...", file=sys.stderr)
     try:
         from faster_whisper import WhisperModel
@@ -120,9 +224,10 @@ def load_models():
 
         whisper_model = None
         for device, ctype in [
-            (args.device, "int8"),          # CUDA int8 — no cuBLAS dependency, works on any CUDA GPU
-            (args.device, "int8_float16"),  # int8_float16 — needs cuBLAS, only if above fails
-            ("cpu",       "int8"),          # CPU fallback — always works, but slow on large-v3
+            (args.device, "float16"),       # Best accuracy for RTX 5090
+            (args.device, "int8_float16"),  # Fallback if VRAM is an issue
+            (args.device, "int8"),          # Further fallback
+            ("cpu",       "int8"),          # CPU fallback
         ]:
             try:
                 print(f"  Prøver {device}/{ctype}...", file=sys.stderr)
@@ -322,9 +427,9 @@ def _do_transcribe(model, audio_np):
         beam_size=5,
         vad_filter=False,
         word_timestamps=False,
-        # Bias recognition toward Grace's name + Danish context so "Grace"
-        # isn't mis-heard as "Gris"/"Grys"/"Greis" etc.
-        initial_prompt="Samtale med Grace, en dansk AI-assistent. Hej Grace.",
+        # Bias toward Grace's name + Mikkel's tech vocabulary (config/stt-bias.json)
+        # so "Grace"/"Claude"/"Gemini" etc. aren't mis-heard.
+        initial_prompt=FW_INITIAL_PROMPT,
         # ── Hallucination suppression ──────────────────────────────────────
         # Without these, Whisper invents plausible-sounding text on silence
         # or very quiet audio (e.g. "Danske tekster af Nicolai Winther").
@@ -339,7 +444,16 @@ def _do_transcribe(model, audio_np):
     return full_text, info.language or args.lang, confidence
 
 def transcribe(whisper_model, audio_np: np.ndarray):
-    """Run Whisper on audio buffer and emit transcript. Falls back to CPU if CUDA fails."""
+    """Run Whisper on audio buffer and emit transcript. Dispatches by backend."""
+    if args.backend == 'openvino':
+        try:
+            text, language, confidence = whisper_model.transcribe(audio_np)
+            if text:
+                emit_transcript(text=text, confidence=confidence, language=language)
+        except Exception as e:
+            emit_error(f"OpenVINO transcription error: {e}")
+        return
+    # ── faster-whisper path (CUDA, with one-time CPU fallback on cuBLAS failure) ──
     global _cpu_fallback_model
     # Once cuBLAS has failed once, the CUDA model can HANG on reuse — which froze
     # Grace after a single turn. After the first fallback, use the CPU model directly.

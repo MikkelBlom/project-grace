@@ -359,6 +359,8 @@ class ChromaBridge {
   private collectionIds = new Map<string, string>();
   private initPromise: Promise<boolean> | null = null;
   private warned = false;
+  /** Set once ChromaDB proves unavailable, so we stop blocking every turn on it. */
+  private disabled = false;
 
   private async fetchJson(url: string, init?: RequestInit): Promise<any> {
     const res = await fetch(url, {
@@ -415,26 +417,43 @@ class ChromaBridge {
 
   async ensureReady(): Promise<boolean> {
     if (this.ready) return true;
+    if (this.disabled) return false;   // already gave up — never block conversation again
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
       if (await this.heartbeat()) {
         this.ready = true;
         return true;
       }
-      this.startDocker();
+      // ChromaDB is NICE-TO-HAVE (vector recall), NOT a hard dependency. An infinite wait
+      // here used to deadlock the entire LLM turn (no reply at all) when Docker wasn't running.
+      const started = this.startDocker();
+      if (!started) {
+        // Docker/compose can't bring Chroma up — nothing to wait for. Disable now so the
+        // first utterance isn't stalled, and Grace falls back to the local sqlite journal.
+        this.disabled = true;
+        console.warn('[Memory] ChromaDB/Docker unavailable — semantic recall DISABLED for this session. '
+          + 'Grace still works (sqlite memory intact); start Docker Desktop to re-enable vector recall.');
+        return false;
+      }
+      // Compose succeeded — give the container up to 20s to become healthy.
+      const deadlineMs = Date.now() + 20_000;
       let logged = false;
-      while (true) {
+      while (Date.now() < deadlineMs) {
         if (await this.heartbeat()) {
           this.ready = true;
           if (logged) console.log('[Memory] ChromaDB is now online.');
           return true;
         }
         if (!logged) {
-          console.warn('[Memory] Waiting for ChromaDB to start (Hard Dependency)...');
+          console.warn('[Memory] Waiting for ChromaDB to start (up to 20s)...');
           logged = true;
         }
         await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
+      this.disabled = true;
+      console.warn('[Memory] ChromaDB unavailable — semantic recall DISABLED for this session. '
+        + 'Grace still works (sqlite memory intact); start Docker Desktop to re-enable vector recall.');
+      return false;
     })();
     const result = await this.initPromise;
     this.initPromise = null;
@@ -482,7 +501,7 @@ class ChromaBridge {
       try {
         const result = await this.fetchJson(`${OLLAMA_URL}/api/embeddings`, {
           method: 'POST',
-          body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
+          body: JSON.stringify({ model: EMBED_MODEL, prompt: text, keep_alive: -1 }),
           signal: AbortSignal.timeout(20_000),
         });
         const embedding = result?.embedding;

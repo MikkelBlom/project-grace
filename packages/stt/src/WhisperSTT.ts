@@ -23,6 +23,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODEL      = process.env.GRACE_WHISPER_MODEL  ?? 'large-v3';
 const DEVICE     = process.env.GRACE_WHISPER_DEVICE ?? 'cuda';
 const LANG       = process.env.GRACE_WHISPER_LANG   ?? 'da';
+// 'faster-whisper' (CUDA) or 'openvino' (Arc iGPU). OV model/device come from
+// GRACE_OV_MODEL / GRACE_OV_DEVICE env, read directly by the Python server.
+const BACKEND    = process.env.GRACE_STT_BACKEND    ?? 'faster-whisper';
 const PYTHON_CMD = process.env.GRACE_PYTHON_CMD     ?? 'py';
 // Optional version flag for the Windows py launcher (e.g. '-3.12').
 // Set GRACE_PYTHON_VER='' to disable if using python3 directly.
@@ -48,6 +51,7 @@ export class WhisperSTT {
 
     console.log('[WhisperSTT] Starting Python server (Windows)...');
     console.log(`[WhisperSTT]   Script: ${SERVER_SCRIPT}`);
+    console.log(`[WhisperSTT]   Backend: ${BACKEND}`);
     console.log(`[WhisperSTT]   Model:  ${MODEL}`);
     console.log(`[WhisperSTT]   Device: ${DEVICE}`);
     console.log(`[WhisperSTT]   Lang:   ${LANG}`);
@@ -55,9 +59,10 @@ export class WhisperSTT {
     this.process = spawn(PYTHON_CMD, [
       ...(PYTHON_VER ? [PYTHON_VER] : []),
       SERVER_SCRIPT,
-      '--model',  MODEL,
-      '--device', DEVICE,
-      '--lang',   LANG,
+      '--model',   MODEL,
+      '--device',  DEVICE,
+      '--lang',    LANG,
+      '--backend', BACKEND,
     ], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
@@ -105,6 +110,8 @@ export class WhisperSTT {
           if (t.includes('UserWarning'))       return false;
           if (t.includes('FutureWarning'))     return false;
           if (t.includes('DeprecationWarning')) return false;
+          // Intel oneDNN OpenCL probe noise from the OpenVINO iGPU backend (harmless)
+          if (t.includes('onednn_verbose') || t.includes('CL_INVALID_OPERATION')) return false;
           // VAD probability lines ([VAD] prob=0.00 |...|) — shown every ~2s,
           // visible in the debug overlay instead (Ctrl+Shift+L)
           if (/^\[VAD\] prob=/.test(t))        return false;
