@@ -159,7 +159,9 @@ class OpenVinoWhisper:
         if hotwords:
             try: cfg.hotwords = " ".join(hotwords)
             except Exception: pass
-        if num_beams and num_beams > 1:
+        # Beam search >1 is NOT implemented on the OpenVINO GPU/NPU plugins (raises
+        # "Not Implemented" at generate time and crash-loops STT). Only honour it on CPU.
+        if num_beams and num_beams > 1 and str(device).upper().startswith('CPU'):
             try: cfg.num_beams = num_beams
             except Exception: pass
         self.cfg = cfg
