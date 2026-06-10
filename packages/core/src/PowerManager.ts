@@ -103,21 +103,8 @@ export class PowerManager {
       }
     });
 
-    // Fullscreen game detection via context updates
-    bus.on('system:contextUpdate', ({ activeApp, isFullscreen }) => {
-      if (!this.autoPauseOnGame) return;
-
-      if (isFullscreen && this.state === 'active') {
-        // Entering fullscreen game
-        this.wasOnACBeforeGame = !powerMonitor.isOnBatteryPower();
-        console.log(`[PowerManager] Fuldskærm detekteret (${activeApp}) — pauser Grace`);
-        this.transitionTo('paused', `Spil/fuldskærm: ${activeApp}`);
-      } else if (!isFullscreen && this.state === 'paused' && this.wasOnACBeforeGame) {
-        // Exiting fullscreen — resume if we were active before
-        console.log('[PowerManager] Fuldskærm afsluttet — genoptager Grace');
-        this.transitionTo('active', 'Fuldskærm afsluttet');
-      }
-    });
+    // Fullscreen game detection has been disabled per user request.
+    // Grace will only pause when manually instructed via commands, tray, or shortcuts.
 
     // Respect external pause/resume commands (e.g. from tray)
     bus.on('power:stateChange', ({ state }) => {

@@ -157,7 +157,7 @@ export class GraceCore {
       if (!response.text?.trim()) {
         console.log('[Grace] 🤐 (stayed silent — <SKIP>)');
         this.isProcessing = false;
-        bus.emit('overlay:show', { type: 'listening' });
+        bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
         return;
       }
 
@@ -195,7 +195,7 @@ export class GraceCore {
       bus.emit('stt:resume', {});
       setTimeout(() => {
         this.isProcessing = false;
-        bus.emit('overlay:show', { type: 'listening' });
+        bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
       }, 500);
     });
 
@@ -209,7 +209,7 @@ export class GraceCore {
       if (this.listenMode) this.exitListenMode(true);   // discard the held buffer
       this.isProcessing = false;
       bus.emit('tts:stop', {});                         // belt-and-braces: flush speech regardless of subscriber order
-      bus.emit('overlay:show', { type: 'listening' });
+      bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
     });
 
     bus.on('control:pause', () => { bus.emit('overlay:show', { type: 'thinking' }); });
@@ -228,7 +228,7 @@ export class GraceCore {
           bus.emit('overlay:show', { type: 'thinking' });
           bus.emit('llm:thinking', { sessionId: this.sessionId, text: combined, history: snap });
         } else {
-          bus.emit('overlay:show', { type: 'listening' });
+          bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
         }
       }
     });
@@ -263,7 +263,9 @@ export class GraceCore {
       } else if (state === 'active' && prev === 'field-notes') {
         bus.emit('overlay:show', { type: 'listening' });
       } else if (state === 'paused' || state === 'sleeping') {
-        bus.emit('overlay:show', { type: 'paused' });
+        if (!this.isProcessing) {
+          bus.emit('overlay:show', { type: 'paused' });
+        }
       }
     });
 

@@ -35,32 +35,43 @@ args = parser.parse_args()
 
 SAMPLE_RATE = 24000  # Kokoro outputs 24 kHz
 
-# -- Load Kokoro --------------------------------------------------------------
-try:
-    from kokoro import KPipeline
-except ImportError as e:
-    print(f"[TTS] Missing dependency: {e}", file=sys.stderr)
-    print('[TTS] Install: py -3.12 -m pip install kokoro "misaki[en]" soundfile', file=sys.stderr)
-    sys.exit(1)
+import threading
+import time
+import sys
 
-print(f"[TTS] Loading Kokoro-82M (lang={args.lang}, voice={args.voice})...", file=sys.stderr)
-try:
-    # Use the GPU when torch sees CUDA — far faster synth, so multi-sentence
-    # replies stop lagging between sentences. Falls back to CPU otherwise.
+pipeline = None
+is_ready = False
+loading_error = None
+
+def load_kokoro_thread():
+    global pipeline, is_ready, loading_error
+    print(f"[TTS] Loading Kokoro-82M (lang={args.lang}, voice={args.voice})...", file=sys.stderr)
     try:
-        import torch
-        _device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    except Exception:
-        _device = 'cpu'
-    print(f"[TTS] Kokoro device: {_device}", file=sys.stderr)
-    pipeline = KPipeline(lang_code=args.lang, repo_id='hexgrad/Kokoro-82M', device=_device)
-    # Warm up so the first real request isn't slow.
-    for _ in pipeline('Ready.', voice=args.voice):
-        pass
-    print(f"[TTS] Kokoro ready -- {args.voice} @ {SAMPLE_RATE}Hz", file=sys.stderr)
-except Exception as e:
-    print(f"[TTS] FATAL: could not load Kokoro: {e}", file=sys.stderr)
-    sys.exit(1)
+        try:
+            from kokoro import KPipeline
+        except ImportError as e:
+            print(f"[TTS] Missing dependency: {e}", file=sys.stderr)
+            print('[TTS] Install: py -3.12 -m pip install kokoro "misaki[en]" soundfile', file=sys.stderr)
+            loading_error = str(e)
+            return
+
+        try:
+            import torch
+            _device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        except Exception:
+            _device = 'cpu'
+        print(f"[TTS] Kokoro device: {_device}", file=sys.stderr)
+        pipeline = KPipeline(lang_code=args.lang, repo_id='hexgrad/Kokoro-82M', device=_device)
+        # Warm up so the first real request isn't slow.
+        for _ in pipeline('Ready.', voice=args.voice):
+            pass
+        print(f"[TTS] Kokoro ready -- {args.voice} @ {SAMPLE_RATE}Hz", file=sys.stderr)
+        is_ready = True
+    except Exception as e:
+        print(f"[TTS] FATAL: could not load Kokoro: {e}", file=sys.stderr)
+        loading_error = str(e)
+
+threading.Thread(target=load_kokoro_thread, daemon=True).start()
 
 # -- Synthesis ----------------------------------------------------------------
 def synthesize_audio(text: str, voice: str, speed: float):
@@ -118,7 +129,7 @@ class TTSHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         p = urlparse(self.path).path
         if p == '/health':
-            self.send_json(200, {'status': 'ok', 'engine': 'kokoro',
+            self.send_json(200, {'status': 'ok' if is_ready else 'loading', 'engine': 'kokoro',
                                  'voice': args.voice, 'sample_rate': SAMPLE_RATE})
         elif p == '/voices':
             self.send_json(200, {'voices': [
@@ -134,6 +145,13 @@ class TTSHandler(BaseHTTPRequestHandler):
         if p not in ('/synthesize', '/speak'):
             self.send_json(404, {'error': 'Not found'})
             return
+
+        while not is_ready and not loading_error:
+            time.sleep(0.1)
+        if loading_error:
+            self.send_json(500, {'error': f"Failed to load Kokoro: {loading_error}"})
+            return
+
         try:
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length))

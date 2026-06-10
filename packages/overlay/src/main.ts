@@ -43,6 +43,7 @@ app.commandLine.appendSwitch('enable-transparent-visuals');
 // Fallback for debugging a black/opaque overlay — forces software compositing.
 // Uncomment ONLY if transparency still fails with the switch above.
 // app.commandLine.appendSwitch('disable-gpu-compositing');
+// app.disableHardwareAcceleration();
 
 let mainWindow:      BrowserWindow    | null = null;
 let core:            GraceCore        | null = null;
