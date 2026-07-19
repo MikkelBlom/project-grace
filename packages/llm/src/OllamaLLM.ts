@@ -431,11 +431,17 @@ export class OllamaLLM {
         // ── Multi-step agentic loop ──────────────────────────────────
         // Grace can chain tool calls: try → read result → adjust → retry,
         // and only answers once she has what's needed (or hits the cap).
+        const priorHistory: Array<{ role: string; content: string }> = (history ?? []).map(h => ({
+          role: h.role === 'assistant' || h.role === 'grace' ? 'assistant' : 'user',
+          content: h.content,
+        }));
+        // GraceCore already appends the current user turn to the history snapshot it sends, so only
+        // add `text` again when the snapshot doesn't already end with it — otherwise the model saw
+        // the same message twice, back-to-back, on every turn.
+        const lastPrior = priorHistory[priorHistory.length - 1];
+        const userTextAlreadyPresent = !!lastPrior && lastPrior.role === 'user' && lastPrior.content === text;
         const work: Array<{ role: string; content: string }> = [
-          ...(history ?? []).map(h => ({
-            role: h.role === 'assistant' || h.role === 'grace' ? 'assistant' : 'user',
-            content: h.content,
-          })),
+          ...priorHistory,
           // Carry the previous tool result so "go into that folder" keeps its place.
           ...(this.lastToolContext ? [{
             role: 'user',
@@ -445,7 +451,7 @@ export class OllamaLLM {
                 : '') +
               `When Mikkel refers to "that folder", "go deeper", or "the one you mentioned", reuse the FULL absolute path from this result as the search 'root'.`,
           }] : []),
-          { role: 'user', content: text },
+          ...(userTextAlreadyPresent ? [] : [{ role: 'user', content: text }]),
         ];
         const MAX_STEPS = 8;   // cap, not a target — she stops early when done; tokens are free (local)
         let allSpoken: string[] = [];
@@ -538,8 +544,15 @@ export class OllamaLLM {
             return { tool: c.tool, args: c.args, result };
           }));
 
-          const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.result).slice(0, 128000)}`).join('\n');
-          lastToolNote = runs.map(r => `${r.tool}(${JSON.stringify(r.args)}) → ${JSON.stringify(r.result).slice(0, 128000)}`).join('\n');
+          // Bound how much tool output is fed back so several large results can't overflow the 128k
+          // window (which silently truncates the prefix — the old 128000/result had no total cap).
+          const PER_RESULT_CAP = 24000;   // ~6k tokens per result — fits a full research digest
+          const COMBINED_CAP = 48000;     // ~12k tokens total, leaving ample room for history + prompt
+          const combinedRaw = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.result).slice(0, PER_RESULT_CAP)}`).join('\n');
+          const combined = combinedRaw.length > COMBINED_CAP
+            ? combinedRaw.slice(0, COMBINED_CAP) + '\n…[tool output truncated to fit context]'
+            : combinedRaw;
+          lastToolNote = runs.map(r => `${r.tool}(${JSON.stringify(r.args)}) → ${JSON.stringify(r.result).slice(0, PER_RESULT_CAP)}`).join('\n');
           const verify = runs.some(r => MUTATING_TOOLS.has(r.tool))
             ? 'You changed files — VERIFY by calling list_dir on the target folder(s). Check the TOTAL count and that NO file has bytes: 0. Report the ACTUAL count you verified, not just "all look good." ' : '';
           const deferMsg = deferredCount > 0
