@@ -14,6 +14,45 @@ interface Source {
   excerpt: string;
 }
 
+const OLLAMA_URL = process.env.GRACE_OLLAMA_URL ?? 'http://localhost:11434';
+const VERIFY_MODEL = process.env.GRACE_LLM_MODEL ?? 'gemma4:26b';
+
+interface Synthesis { answer: string; confidence: 'high' | 'medium' | 'low'; unsupported: string[]; }
+
+// Self-verify pass: fact-check an answer STRICTLY against the fetched sources (no outside knowledge),
+// returning a confidence rating and which parts of the question the sources don't actually answer.
+// This is the "correct itself before presenting" step — the model then relays it and flags best-guesses.
+async function verifyFromSources(question: string, sources: Source[]): Promise<Synthesis | null> {
+  const corpus = sources.filter((s) => s.excerpt).slice(0, 4)
+    .map((s) => `[${s.n}] ${s.title} (${s.url})\n${s.excerpt.slice(0, 1800)}`).join('\n\n');
+  if (!corpus) return null;
+  const prompt = `You are fact-checking an answer STRICTLY against the SOURCES below. Do not use any outside knowledge.\n\n`
+    + `QUESTION: ${question}\n\nSOURCES:\n${corpus}\n\n`
+    + `Return ONLY JSON:\n{\n  "answer": "the answer supported by the sources, concise and spoken-style",\n`
+    + `  "confidence": "high | medium | low",\n  "unsupported": ["any part of the question the sources do NOT actually answer"]\n}\n`
+    + `Use confidence "high" only if multiple sources agree; "low" if the sources are thin, off-topic, or conflict.`;
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: VERIFY_MODEL, prompt, stream: false, think: false, format: 'json', options: { temperature: 0.1, num_ctx: 16384 }, keep_alive: -1 }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { response?: string };
+    const raw = (data.response ?? '').trim();
+    const start = raw.indexOf('{'); const end = raw.lastIndexOf('}');
+    if (start < 0 || end < 0) return null;
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    const confidence = ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low';
+    return {
+      answer: String(parsed.answer ?? '').trim(),
+      confidence,
+      unsupported: Array.isArray(parsed.unsupported) ? parsed.unsupported.map(String) : [],
+    };
+  } catch { return null; }
+}
+
 registerTool({
   name: 'research',
   description: 'Answer a question from LIVE web sources instead of memory. Runs web_search, reads the top pages, and returns a numbered digest of sources with excerpts. Use for anything time-sensitive, factual, or that you are not fully certain of. Then base your spoken answer ONLY on the returned sources, cite them, and mark anything unsupported as a best guess. Prefer this over guessing from memory for real-world facts.',
@@ -74,12 +113,16 @@ registerTool({
       sources.push({ n: i + 1, title: h.title, url: h.url, published: h.published, snippet: h.snippet, excerpt: '' });
     }
 
+    const synthesis = await verifyFromSources(question, sources);
     return {
       question,
       provider,
       sourceCount: sources.length,
       sources,
-      note: 'Answer Mikkel using ONLY these sources. Cite by number/title. If sources disagree, or do not cover part of the question, say so and mark that part as a best guess — do not fill gaps with assumptions.',
+      synthesis: synthesis ?? undefined,
+      note: synthesis
+        ? `A source-checked answer is in "synthesis" (confidence: ${synthesis.confidence}). Relay synthesis.answer to Mikkel. If confidence is not "high", or synthesis.unsupported is non-empty, clearly mark those parts as your best guess. Do not add facts beyond the sources.`
+        : 'Answer Mikkel using ONLY these sources. Cite by number/title. If sources disagree or do not cover part of the question, say so and mark that part as a best guess — do not fill gaps with assumptions.',
     };
   },
 });
