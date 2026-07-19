@@ -21,6 +21,7 @@ import { writeFile, unlink, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import { bus, settings, logTiming } from '@grace/core';
+import { splitForTTS } from './ttsChunk.js';
 
 const KOKORO_URL = process.env.GRACE_KOKORO_URL   ?? 'http://localhost:8765';
 const VOICE      = process.env.GRACE_KOKORO_VOICE ?? 'af_heart';
@@ -37,21 +38,6 @@ const TEMP_DIR   = path.join(tmpdir(), 'grace-tts');
 // is synthesised — lower first-audio latency. Off by default (per-clip playback dropped over
 // Bluetooth); enable with GRACE_TTS_STREAM=1, and it's automatic with the persistent server stream.
 const STREAMING  = process.env.GRACE_TTS_STREAM === '1' || PLAYBACK === 'server';
-
-/** Split text into speak-sized chunks on sentence boundaries. Flushes each time the buffer reaches
- *  ~24 chars, so the first sentence(s) play quickly (fast first audio) while only merging genuinely
- *  tiny fragments to avoid a flurry of one-word clips. */
-function splitForTTS(text: string): string[] {
-  const pieces = text.match(/[^.!?…]+[.!?…]+|\S[^.!?…]*$/g) ?? [text];
-  const chunks: string[] = [];
-  let buf = '';
-  for (const p of pieces) {
-    buf = buf ? `${buf} ${p.trim()}` : p.trim();
-    if (buf.length >= 24) { chunks.push(buf); buf = ''; }
-  }
-  if (buf.trim()) chunks.push(buf.trim());
-  return chunks.length ? chunks : [text];
-}
 
 // ─────────────────────────────────────────────
 
