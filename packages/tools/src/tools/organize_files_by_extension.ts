@@ -4,15 +4,8 @@ registerTool({
   name: 'organize_files_by_extension',
   description: 'Moves files in a specified directory into subfolders named after their file extensions.',
   params: {
-    type: 'object',
-    properties: {
-      root_path: {
-        type: 'string',
-        description: 'The absolute path of the directory to organize.'
-      }
-    },
-    required: ['root_path']
-  } as any,
+    root_path: { type: 'string', description: 'The absolute path of the directory to organize.', required: true },
+  },
   async run(args: any, ctx: any) {
     const { root_path } = args;
     try {

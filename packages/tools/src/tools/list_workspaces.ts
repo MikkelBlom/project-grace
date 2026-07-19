@@ -1,8 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { registerTool } from '../registry.js';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
+// The built file lives at packages/tools/dist/tools/ → the repo root is four levels up. The old
+// `new URL(import.meta.url).pathname` yielded a malformed /C:/… path on Windows and only went three
+// levels up, so SCRATCHPAD_DIR pointed at packages/tools/data and this tool always returned [].
+const ROOT = process.env.GRACE_REPO_ROOT
+  ? path.resolve(process.env.GRACE_REPO_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const SCRATCHPAD_DIR = path.join(ROOT, 'data', 'scratchpads');
 
 registerTool({

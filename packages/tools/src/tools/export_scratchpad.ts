@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { graceMemory } from '@grace/core';
 import { registerTool } from '../registry.js';
@@ -17,6 +18,11 @@ registerTool({
     if (typeof args.path === 'string' && args.path.trim()) {
       try {
         const p = path.resolve(String(args.path));
+        // Gate writes to the user's home folder, like the other write tools — this used to accept
+        // any absolute path.
+        if (path.relative(os.homedir(), p).startsWith('..')) {
+          return { ok: false, error: `Refusing to write outside your home folder (${os.homedir()}).` };
+        }
         fs.mkdirSync(path.dirname(p), { recursive: true });
         fs.writeFileSync(p, content, 'utf-8');
         return { ok: true, path: p };

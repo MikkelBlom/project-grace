@@ -1,12 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { graceMemory } from '@grace/core';
 import { registerTool } from '../registry.js';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
-const MEMORY_PATH = path.join(ROOT, 'data', 'grace-memory.json');
+const ROOT = process.env.GRACE_REPO_ROOT
+  ? path.resolve(process.env.GRACE_REPO_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const PERSONALITY_PATH = path.join(ROOT, 'config', 'personality.json');
-const OLLAMA_URL = process.env.OLLAMA_API_URL ?? 'http://127.0.0.1:11434';
+// Use the same Ollama env var as the rest of the stack (this used to read OLLAMA_API_URL, so a
+// GRACE_OLLAMA_URL override was silently ignored here).
+const OLLAMA_URL = process.env.GRACE_OLLAMA_URL ?? 'http://localhost:11434';
 const MODEL = process.env.GRACE_LLM_MODEL ?? 'gemma4:26b';
 
 function redactSensitiveInfo(text: string): string {
@@ -25,24 +29,14 @@ registerTool({
   async run(args) {
     const numTurns = typeof args.numTurns === 'number' ? args.numTurns : 50;
 
-    if (!fs.existsSync(MEMORY_PATH)) {
-      return { ok: false, error: 'No memory logs found to analyze.' };
+    // Read from the live memory store (recentTurns) instead of a stale data/grace-memory.json that
+    // the current sqlite/semantic-journal backend never writes.
+    const turns = graceMemory.recentTurns(numTurns);
+    if (!turns.length) {
+      return { ok: false, error: 'No conversation turns to analyze yet.' };
     }
 
-    let memory;
-    try {
-      memory = JSON.parse(fs.readFileSync(MEMORY_PATH, 'utf-8'));
-    } catch (e) {
-      return { ok: false, error: 'Failed to parse memory logs.' };
-    }
-
-    const turns = memory.turns || [];
-    if (turns.length === 0) {
-      return { ok: false, error: 'Memory logs are empty.' };
-    }
-
-    const recentTurns = turns.slice(-numTurns);
-    const logText = recentTurns.map((t: any) => `${t.role.toUpperCase()}: ${t.content}`).join('\n');
+    const logText = turns.map((t: any) => `${String(t.role).toUpperCase()}: ${t.content}`).join('\n');
     const safeLogText = redactSensitiveInfo(logText);
 
     let currentPersonality = '';
