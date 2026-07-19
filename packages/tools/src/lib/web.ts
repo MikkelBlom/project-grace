@@ -18,7 +18,7 @@ export interface SearchResult {
 }
 
 export interface SearchResponse {
-  provider: 'searxng' | 'duckduckgo' | 'none';
+  provider: string; // 'tavily' | 'brave' | 'searxng' | 'duckduckgo' | 'none'
   results: SearchResult[];
   error?: string;
 }
@@ -125,33 +125,57 @@ async function duckduckgoSearch(query: string, limit: number): Promise<SearchRes
   return results;
 }
 
+// Optional keyed providers — used first when their API key is set (env). Both return the common shape.
+async function tavilySearch(query: string, limit: number): Promise<SearchResult[]> {
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: process.env.GRACE_TAVILY_KEY, query, max_results: limit }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`);
+  const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
+  return (data.results ?? []).slice(0, limit).map((r) => ({
+    title: String(r.title ?? '').trim(), url: String(r.url ?? '').trim(),
+    snippet: String(r.content ?? '').replace(/\s+/g, ' ').trim(),
+  })).filter((r) => r.url);
+}
+
+async function braveSearch(query: string, limit: number): Promise<SearchResult[]> {
+  const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`, {
+    headers: { Accept: 'application/json', 'X-Subscription-Token': process.env.GRACE_BRAVE_KEY ?? '' },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`Brave HTTP ${res.status}`);
+  const data = (await res.json()) as { web?: { results?: Array<Record<string, unknown>> } };
+  return (data.web?.results ?? []).slice(0, limit).map((r) => ({
+    title: String(r.title ?? '').trim(), url: String(r.url ?? '').trim(),
+    snippet: decodeEntities(String(r.description ?? '')).replace(/\s+/g, ' ').trim(),
+  })).filter((r) => r.url);
+}
+
 /**
- * Search the web. Prefers a local SearXNG instance (private, controllable) and falls
- * back to DuckDuckGo so search still works before SearXNG is deployed. Returns a
- * structured error rather than an empty array when both backends are unavailable — so
- * the caller/model can react instead of mistaking "backend down" for "no results".
+ * Search the web through a provider registry: keyed APIs first when configured (Tavily, Brave),
+ * then a local SearXNG instance (private), then DuckDuckGo. Returns a structured error rather than
+ * an empty array when everything is unavailable — so the caller/model can react instead of mistaking
+ * "backend down" for "no results".
  */
 export async function searchWeb(query: string, limit = 8): Promise<SearchResponse> {
   const q = query.trim();
   if (!q) return { provider: 'none', results: [], error: 'empty query' };
 
-  try {
-    const results = await searxngSearch(q, limit);
-    if (results.length) return { provider: 'searxng', results };
-    // Reachable but empty — try the fallback before giving up.
-  } catch {
-    // SearXNG not configured/reachable — fall through to DuckDuckGo.
-  }
+  const providers: Array<[string, () => Promise<SearchResult[]>]> = [];
+  if (process.env.GRACE_TAVILY_KEY) providers.push(['tavily', () => tavilySearch(q, limit)]);
+  if (process.env.GRACE_BRAVE_KEY) providers.push(['brave', () => braveSearch(q, limit)]);
+  providers.push(['searxng', () => searxngSearch(q, limit)]);
+  providers.push(['duckduckgo', () => duckduckgoSearch(q, limit)]);
 
-  try {
-    const results = await duckduckgoSearch(q, limit);
-    if (results.length) return { provider: 'duckduckgo', results };
-    return { provider: 'duckduckgo', results: [], error: 'No results (SearXNG unavailable, DuckDuckGo returned nothing).' };
-  } catch (e) {
-    return {
-      provider: 'none',
-      results: [],
-      error: `Search unavailable: SearXNG not reachable at ${SEARXNG_URL} and DuckDuckGo failed (${String(e).slice(0, 160)}).`,
-    };
+  let lastErr = '';
+  for (const [name, fn] of providers) {
+    try {
+      const results = await fn();
+      if (results.length) return { provider: name, results };
+    } catch (e) { lastErr = String(e).slice(0, 120); }
   }
+  return { provider: 'none', results: [], error: `Search unavailable (tried ${providers.map((p) => p[0]).join(', ')}). ${lastErr}` };
 }
