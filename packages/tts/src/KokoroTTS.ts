@@ -20,11 +20,15 @@ import { spawn, type ChildProcess } from 'child_process';
 import { writeFile, unlink, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
-import { bus } from '@grace/core';
+import { bus, settings } from '@grace/core';
 
 const KOKORO_URL = process.env.GRACE_KOKORO_URL   ?? 'http://localhost:8765';
 const VOICE      = process.env.GRACE_KOKORO_VOICE ?? 'af_heart';
 const SPEED      = parseFloat(process.env.GRACE_KOKORO_SPEED ?? '1.0');
+// Danish TTS backend (Piper/CoRal), exposing the SAME /synthesize + /speak API as Kokoro. Empty
+// until wired — in Danish mode without it, we fall back to the English voice (and warn once).
+const DA_TTS_URL = process.env.GRACE_TTS_DA_URL   ?? '';
+const DA_VOICE   = process.env.GRACE_TTS_DA_VOICE ?? 'da_DK';
 // 'server' = server synthesizes AND plays via a persistent stream (smoother over Bluetooth).
 // 'powershell' (default) = fetch WAV + play per-clip via PowerShell SoundPlayer.
 const PLAYBACK   = process.env.GRACE_TTS_PLAYBACK ?? 'powershell';
@@ -40,6 +44,20 @@ export class KokoroTTS {
   private currentChild: ChildProcess | null = null;
   /** Set when a stop is requested so an in-flight synth/play resolves quietly instead of continuing. */
   private stopRequested = false;
+  private warnedNoDanish = false;
+
+  /** Pick the TTS endpoint + voice for the ACTIVE language. Danish routes to GRACE_TTS_DA_URL
+   *  when configured; otherwise falls back to the English Kokoro voice (warned once). */
+  private ttsTarget(): { url: string; voice: string } {
+    if (settings.language === 'da') {
+      if (DA_TTS_URL) return { url: DA_TTS_URL, voice: DA_VOICE };
+      if (!this.warnedNoDanish) {
+        console.warn('[KokoroTTS] Danish mode but no GRACE_TTS_DA_URL — using the English voice. Wire the Danish TTS backend for natural Danish speech.');
+        this.warnedNoDanish = true;
+      }
+    }
+    return { url: KOKORO_URL, voice: VOICE };
+  }
 
   constructor() {
     this.ensureTempDir();
@@ -145,21 +163,22 @@ export class KokoroTTS {
   // ── TTS server (Piper / Kokoro) ──────────────
 
   private async speakViaServer(text: string): Promise<void> {
+    const target = this.ttsTarget();
     if (PLAYBACK === 'server') {
       // Server synthesizes AND plays via a persistent stream — no per-clip spawn.
-      const r = await fetch(`${KOKORO_URL}/speak`, {
+      const r = await fetch(`${target.url}/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: VOICE, speed: SPEED }),
+        body: JSON.stringify({ text, voice: target.voice, speed: SPEED }),
         signal: AbortSignal.timeout(60_000),
       });
       if (!r.ok) throw new Error(`TTS server /speak HTTP ${r.status}`);
       return;
     }
-    const res = await fetch(`${KOKORO_URL}/synthesize`, {
+    const res = await fetch(`${target.url}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: VOICE, speed: SPEED }),
+      body: JSON.stringify({ text, voice: target.voice, speed: SPEED }),
       signal: AbortSignal.timeout(30_000),
     });
 

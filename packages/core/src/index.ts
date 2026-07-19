@@ -2,6 +2,8 @@ export { bus, GraceEventBus } from "./EventBus.js";
 export { GraceCore } from "./GraceCore.js";
 export { PowerManager } from "./PowerManager.js";
 export { GraceMemory, graceMemory } from './memory.js';
+export { settings, parseLanguage, languageName } from './settings.js';
+export type { Language } from './settings.js';
 export type {
 	Turn,
 	SemanticRecord,

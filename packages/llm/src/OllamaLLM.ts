@@ -16,7 +16,7 @@
 // Grace's system prompt er injected her — dette er hendes identitet.
 // ─────────────────────────────────────────────
 
-import { bus, graceMemory } from '@grace/core';
+import { bus, graceMemory, settings, languageName } from '@grace/core';
 import os from 'os';
 import path from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
@@ -208,7 +208,13 @@ const RETRIEVAL_GUIDANCE = [
 
 const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE, COGNITIVE_GUIDANCE, INPUT_AND_ACTION_GUIDANCE, RETRIEVAL_GUIDANCE].filter(Boolean).join('\n\n');
 function currentSystemPrompt(): string {
-  return [STATIC_PROMPT, describeTools()].filter(Boolean).join('\n\n');
+  // ACTIVE LANGUAGE is rebuilt every turn (the prompt is dynamic), so a spoken "switch to
+  // English" / "skift til dansk" takes effect on the very next reply.
+  const lang = languageName(settings.language);
+  const langDirective =
+    `ACTIVE LANGUAGE: ${lang}. Your spoken reply (the "speak" field) MUST be in ${lang}. `
+    + `Understand both Danish and English input regardless. This overrides any other language rule.`;
+  return [STATIC_PROMPT, langDirective, describeTools()].filter(Boolean).join('\n\n');
 }
 
 function inferPromptQuery(messages: Array<{ role: string; content: string }>): string {

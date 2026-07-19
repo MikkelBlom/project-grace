@@ -11,6 +11,7 @@
 
 import { bus } from './EventBus.js';
 import { graceMemory } from './memory.js';
+import { settings } from './settings.js';
 import type { GraceConfig, GraceMode, GracePowerState, ConversationTurn } from '@grace/shared';
 
 // Hold-the-floor / "listen mode" trigger phrases (case-insensitive, DA + EN).
@@ -38,6 +39,9 @@ const CTRL_STOP_RE   = /^(stop|stop nu|stop det|stop arbejdet|hold op|hold da op
 const CTRL_PAUSE_RE  = /^(pause|pausér|pauser|sæt (det )?på pause|hold (en )?pause|vent lige)\b/i;
 const CTRL_RESUME_RE = /^(fortsæt|forsæt|kør videre|genoptag|resume)\b/i;
 const CTRL_STATUS_RE = /^(status|statusrapport|hvor langt er du( med.*)?|giv (mig )?(en )?status(rapport)?)\b/i;
+// Language switch by voice (instant, no LLM round-trip). English mode for English-speaking guests.
+const CTRL_LANG_EN_RE = /^(switch to english|talk(ing)? english|speak(ing)? english|let'?s speak english|in english( now| please)?|english (please|now|mode)|kan (vi|du) (snakke|tale) engelsk)\b/i;
+const CTRL_LANG_DA_RE = /^(skift til dansk|tal(er)? dansk|på dansk( igen| nu| tak)?|snak(ker)? dansk|dansk (igen|nu|tak|mode)|switch to danish|speak danish|danish (please|now|mode))\b/i;
 
 // ── Context-window management ────────────────────────────────────────────────
 // The LLM runs with num_ctx = 128K. Grace feeds it as much REAL conversation as fits in a
@@ -119,6 +123,17 @@ export class GraceCore {
         if (CTRL_PAUSE_RE.test(u))  { console.log('[Core] 🎙 voice PAUSE');  bus.emit('control:pause',  { reason: 'voice' }); return; }
         if (CTRL_RESUME_RE.test(u)) { console.log('[Core] 🎙 voice RESUME'); bus.emit('control:resume', { reason: 'voice' }); return; }
         if (CTRL_STATUS_RE.test(u)) { console.log('[Core] 🎙 voice STATUS'); bus.emit('control:status', {}); return; }
+      }
+      // Language switch — allow slightly longer phrases than the stop/pause set.
+      if (u.length <= 40) {
+        if (CTRL_LANG_EN_RE.test(u)) {
+          settings.setLanguage('en'); console.log('[Core] 🌐 language → English');
+          bus.emit('tts:speaking', { text: 'Okay, switching to English.', sessionId }); return;
+        }
+        if (CTRL_LANG_DA_RE.test(u)) {
+          settings.setLanguage('da'); console.log('[Core] 🌐 language → Danish');
+          bus.emit('tts:speaking', { text: 'Så skifter vi til dansk.', sessionId }); return;
+        }
       }
 
       // ── Hold-the-floor / listen mode ──────────
