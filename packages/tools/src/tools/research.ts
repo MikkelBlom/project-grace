@@ -75,8 +75,10 @@ registerTool({
     const hits: Array<{ title: string; url: string; snippet: string; published?: string }> = [];
     let provider = 'none';
     const errors: string[] = [];
-    for (const q of queries) {
-      const r = (await ctx.callTool('web_search', { query: q, limit: 8 })) as any;
+    const searchResults = await Promise.all(queries.map((q) =>
+      ctx!.callTool('web_search', { query: q, limit: 8 }).catch((e) => ({ error: String(e) })),
+    ));
+    for (const r of searchResults as any[]) {
       if (r?.provider) provider = r.provider;
       if (r?.error && !(r?.results?.length)) { errors.push(String(r.error)); continue; }
       for (const res of (r?.results ?? [])) {
@@ -94,11 +96,14 @@ registerTool({
       };
     }
 
-    // 2) Read the top `read` pages in full; keep the rest as snippet-only for breadth.
+    // 2) Read the top `read` pages IN PARALLEL; keep the rest as snippet-only for breadth.
     const sources: Source[] = [];
-    for (let i = 0; i < Math.min(read, hits.length); i++) {
-      const h = hits[i]!;
-      const page = (await ctx.callTool('fetch_url', { url: h.url, maxChars: 4000 })) as any;
+    const toRead = hits.slice(0, Math.min(read, hits.length));
+    const pages = await Promise.all(toRead.map((h) =>
+      ctx!.callTool('fetch_url', { url: h.url, maxChars: 4000 }).catch((e) => ({ error: String(e) })),
+    ));
+    toRead.forEach((h, i) => {
+      const page = pages[i] as any;
       sources.push({
         n: i + 1,
         title: h.title || String(page?.title ?? ''),
@@ -107,7 +112,7 @@ registerTool({
         snippet: h.snippet,
         excerpt: page?.error ? `(could not read page: ${page.error})` : String(page?.text ?? '').slice(0, 4000),
       });
-    }
+    });
     for (let i = read; i < Math.min(hits.length, read + 4); i++) {
       const h = hits[i]!;
       sources.push({ n: i + 1, title: h.title, url: h.url, published: h.published, snippet: h.snippet, excerpt: '' });
