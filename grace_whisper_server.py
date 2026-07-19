@@ -151,6 +151,7 @@ class OpenVinoWhisper:
     def __init__(self, model_dir, device, lang, initial_prompt, hotwords, num_beams=1, cache_dir=None):
         import openvino_genai as ov_genai
         self.lang = lang
+        self.model_dir = model_dir
         # CACHE_DIR persists the compiled GPU kernels so only the FIRST ever startup pays the
         # full ~12-19s Arc compile; later startups reload the cached blobs in ~5s. Combined with
         # the warm-up in load_models(), the compile happens before "ready", never on a real turn.
@@ -190,6 +191,20 @@ class OpenVinoWhisper:
             try: cfg.num_beams = num_beams
             except Exception: pass
         self.cfg = cfg
+
+    def set_hotwords(self, words):
+        # Dynamic contextual bias. Only when safe: hotwords disable forced-language on turbo (see the
+        # __init__ compatibility note), so skip there. Bounded to 12 so the list can't grow unwieldy
+        # and drag WER down — the exact failure mode that made static hotword-piling unhelpful.
+        try:
+            is_turbo = 'turbo' in str(self.model_dir).lower()
+            forced = bool(self.lang and self.lang != 'auto')
+            if forced and is_turbo:
+                return
+            words = [str(w).strip() for w in (words or []) if str(w).strip()][:12]
+            self.cfg.hotwords = ' '.join(words)
+        except Exception as e:
+            print(f"[STT] set_hotwords failed: {e}", file=sys.stderr)
 
     def transcribe(self, audio_np):
         audio = np.ascontiguousarray(audio_np, dtype=np.float32)
@@ -304,6 +319,10 @@ def stdin_listener(state: dict):
                 state["paused"] = True
             elif msg.get("command") == "resume":
                 state["paused"] = False
+            elif msg.get("command") == "set_hotwords":
+                backend = state.get("backend")
+                if backend is not None and hasattr(backend, "set_hotwords"):
+                    backend.set_hotwords(msg.get("words") or [])
         except Exception:
             pass
 
@@ -377,7 +396,7 @@ def run_pipeline(vad_model, get_speech_probs, whisper_model):
     silence_counter = 0
     was_speaking = False
 
-    state = {"paused": False}
+    state = {"paused": False, "backend": whisper_model}
     threading.Thread(target=stdin_listener, args=(state,), daemon=True).start()
 
     def audio_callback(indata, frames, time_info, status):

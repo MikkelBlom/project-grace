@@ -105,6 +105,11 @@ export class GraceCore {
   // Safe when output is in-ear (earbuds) + mic is the laptop's — on laptop SPEAKERS this would
   // feed her own voice back, so it's opt-in. Enable with GRACE_VOICE_BARGEIN=1.
   private bargeIn = process.env.GRACE_VOICE_BARGEIN === '1' || process.env.GRACE_VOICE_BARGEIN === 'true';
+  // Dynamic contextual STT bias (opt-in): feed recently-mentioned proper nouns back to the STT as
+  // hotwords so names Grace just said are heard right next turn. Off by default — hotword-piling can
+  // hurt WER, so this stays bounded (12) and only runs when GRACE_STT_DYNAMIC_BIAS=1.
+  private dynamicBias = process.env.GRACE_STT_DYNAMIC_BIAS === '1';
+  private recentBiasTerms: string[] = [];
 
   constructor(config: GraceConfig) {
     this.config = config;
@@ -152,6 +157,7 @@ export class GraceCore {
         return;
       }
 
+      this.updateBiasFrom(text);   // bias STT toward proper nouns Mikkel just used (opt-in)
       let utterance = text;
 
       // ── Voice control fast-path (stop / pause / resume / status) ──
@@ -239,6 +245,7 @@ export class GraceCore {
 
       // Log Grace's actual reply so it shows up in the terminal logs.
       console.log(`[Grace] 💬 ${response.text}`);
+      this.updateBiasFrom(response.text);   // bias STT toward names Grace just used (opt-in)
 
       if (this.mode !== 'discreet') {
         this.history.push({
@@ -512,6 +519,25 @@ export class GraceCore {
     // Fallback: if summarisation fails, keep a compact raw transcript so facts still survive.
     const rawFold = toFold.map(t => `${t.role === 'grace' ? 'Grace' : 'Mikkel'}: ${t.content}`).join('\n');
     return [existingSummary, rawFold].filter(Boolean).join('\n');
+  }
+
+  // ── Dynamic contextual STT bias (opt-in) ─────────────────────────────────────
+  private extractProperNouns(text: string): string[] {
+    const matches = text.match(/\b[A-ZÆØÅ][A-Za-zÆØÅæøå0-9.+#-]{2,}\b/g) ?? [];
+    const stop = new Set(['The', 'This', 'That', 'And', 'But', 'You', 'Your', 'For', 'With', 'Jeg', 'Det',
+      'Den', 'Der', 'Han', 'Hun', 'Men', 'Hvad', 'Hvor', 'Hvorfor', 'Hvordan', 'Okay', 'Grace']);
+    return matches.filter((w) => !stop.has(w));
+  }
+
+  private updateBiasFrom(text: string): void {
+    if (!this.dynamicBias || !text) return;
+    const nouns = this.extractProperNouns(text);
+    if (!nouns.length) return;
+    const merged = [...new Set([...nouns, ...this.recentBiasTerms])].slice(0, 12);
+    if (merged.join('|') !== this.recentBiasTerms.join('|')) {
+      this.recentBiasTerms = merged;
+      bus.emit('stt:setHotwords', { words: merged });
+    }
   }
 
   getMode(): GraceMode { return this.mode; }

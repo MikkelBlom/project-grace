@@ -12,6 +12,8 @@ export interface GraceEvents {
   'stt:vad': { hasVoice: boolean };
   'stt:pause': Record<string, never>;
   'stt:resume': Record<string, never>;
+  /** Dynamic contextual bias: update the STT hotword list from live context (opt-in). */
+  'stt:setHotwords': { words: string[] };
 
   // ── LLM ───────────────────────────────────
   /** text = the user's raw utterance — passed through so LLM handlers can do contextual matching */

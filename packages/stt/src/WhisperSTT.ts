@@ -43,6 +43,15 @@ export class WhisperSTT {
   constructor() {
     bus.on('stt:pause', () => this.pause());
     bus.on('stt:resume', () => this.resume());
+    bus.on('stt:setHotwords', ({ words }) => this.setHotwords(words));
+  }
+
+  /** Dynamic contextual bias: push an updated hotword list to the Python server (opt-in; the server
+   *  ignores it on turbo-under-forcing and bounds the list). */
+  setHotwords(words: string[]): void {
+    if (this.process?.stdin && this.running) {
+      this.process.stdin.write(JSON.stringify({ command: 'set_hotwords', words }) + '\n');
+    }
   }
 
   start(): void {
