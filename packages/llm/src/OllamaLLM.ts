@@ -16,7 +16,7 @@
 // Grace's system prompt er injected her — dette er hendes identitet.
 // ─────────────────────────────────────────────
 
-import { bus, graceMemory, settings, languageName } from '@grace/core';
+import { bus, graceMemory, settings, languageName, logTiming } from '@grace/core';
 import os from 'os';
 import path from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
@@ -468,8 +468,11 @@ export class OllamaLLM {
         let lastToolNote = '';
 
         let step = 0;
+        const llmStepMs: number[] = [];
         for (; step < MAX_STEPS; step++) {
+          const stepT0 = Date.now();
           const reply = await this.complete(work);
+          llmStepMs.push(Date.now() - stepT0);
           if (this.turnCancelled) { console.log('[OllamaLLM] ⏹ turn cancelled (barge-in)'); return; }
           console.log(`[OllamaLLM] 🧠 Raw reply:\n${reply}`);
           const call = parseToolCall(reply);
@@ -604,7 +607,7 @@ export class OllamaLLM {
           return;
         }
 
-        console.log(`[OllamaLLM] ⏱ replied in ${Date.now() - turnStart}ms`);
+        logTiming('llm.turn', Date.now() - turnStart, { steps: llmStepMs.length, gen: llmStepMs.map((m) => Math.round(m)) });
         // ONE audio clip per reply (GPU synth is fast) — per-sentence clips were
         // dropping mid-reply over Bluetooth. A single clip plays through cleanly.
         bus.emit('tts:speaking', { text: finalText, sessionId });

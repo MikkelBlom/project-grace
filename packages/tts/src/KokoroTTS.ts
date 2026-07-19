@@ -20,7 +20,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { writeFile, unlink, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
-import { bus, settings } from '@grace/core';
+import { bus, settings, logTiming } from '@grace/core';
 
 const KOKORO_URL = process.env.GRACE_KOKORO_URL   ?? 'http://localhost:8765';
 const VOICE      = process.env.GRACE_KOKORO_VOICE ?? 'af_heart';
@@ -175,6 +175,7 @@ export class KokoroTTS {
       if (!r.ok) throw new Error(`TTS server /speak HTTP ${r.status}`);
       return;
     }
+    const synthT0 = Date.now();
     const res = await fetch(`${target.url}/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -185,6 +186,7 @@ export class KokoroTTS {
     if (!res.ok) throw new Error(`TTS server HTTP ${res.status}`);
 
     const wavBuffer = Buffer.from(await res.arrayBuffer());
+    logTiming('tts.synth', Date.now() - synthT0, { chars: text.length, lang: settings.language });
     const wavPath   = path.join(TEMP_DIR, `tts-${Date.now()}.wav`);
     await writeFile(wavPath, wavBuffer);
     await this.playWav(wavPath);

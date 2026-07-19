@@ -10,6 +10,7 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { logTiming } from './timing.js';
 
 const require = createRequire(import.meta.url);
 
@@ -503,13 +504,14 @@ class ChromaBridge {
     let retries = 0;
     while (true) {
       try {
+        const t0 = Date.now();
         const result = await this.fetchJson(`${OLLAMA_URL}/api/embeddings`, {
           method: 'POST',
           body: JSON.stringify({ model: EMBED_MODEL, prompt: text, keep_alive: -1 }),
           signal: AbortSignal.timeout(20_000),
         });
         const embedding = result?.embedding;
-        if (Array.isArray(embedding)) return embedding.map((v: any) => Number(v) || 0);
+        if (Array.isArray(embedding)) { logTiming('embed', Date.now() - t0, { model: EMBED_MODEL }); return embedding.map((v: any) => Number(v) || 0); }
         throw new Error('Invalid embedding format from Ollama');
       } catch (error) {
         retries++;

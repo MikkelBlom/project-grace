@@ -8,6 +8,7 @@ export { sttCorrections } from './sttCorrections.js';
 export type { SttCorrection } from './sttCorrections.js';
 export { fsIndex } from './fsIndex.js';
 export type { FsEntry } from './fsIndex.js';
+export { logTiming } from './timing.js';
 export type {
 	Turn,
 	SemanticRecord,
