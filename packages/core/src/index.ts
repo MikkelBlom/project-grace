@@ -10,6 +10,7 @@ export { fsIndex } from './fsIndex.js';
 export type { FsEntry } from './fsIndex.js';
 export { logTiming } from './timing.js';
 export { focusTimer } from './focusTimer.js';
+export { eyePause } from './eyePause.js';
 export type {
 	Turn,
 	SemanticRecord,
