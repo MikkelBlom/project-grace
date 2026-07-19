@@ -631,6 +631,7 @@ export class GraceMemory {
   private state: StateFile;
   private activeWorkspace: ScratchpadState | null = null;
   private stateLoaded = false;
+  private saveJournalTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     ensureDir(DATA_DIR);
@@ -671,7 +672,14 @@ export class GraceMemory {
   }
 
   private saveSemanticJournal(): void {
-    writeJson(SEMANTIC_JSON_PATH, { records: this.semanticJournal });
+    // Debounced: addSemanticRecord fires on every turn, and a synchronous whole-file rewrite each
+    // time is O(n^2) over a session. Coalesce rapid writes — the journal is a cache (turns are also
+    // in sqlite + Chroma), so a ~1.5s window that could lose the newest record on a hard crash is fine.
+    if (this.saveJournalTimer) return;
+    this.saveJournalTimer = setTimeout(() => {
+      this.saveJournalTimer = null;
+      writeJson(SEMANTIC_JSON_PATH, { records: this.semanticJournal });
+    }, 1500);
   }
 
   private persistWorkspace(workspace: ScratchpadState): void {
