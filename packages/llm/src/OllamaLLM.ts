@@ -198,13 +198,27 @@ const INPUT_AND_ACTION_GUIDANCE = [
   '- If no tool can do it, say so plainly. Do not narrate an action you are not actually taking.',
 ].join('\n');
 
-const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE, COGNITIVE_GUIDANCE, INPUT_AND_ACTION_GUIDANCE].filter(Boolean).join('\n\n');
+const RETRIEVAL_GUIDANCE = [
+  'ANSWERING FROM LIVE SOURCES (retrieval-first — your training is frozen and can be stale or wrong):',
+  '- For anything about the real world that is time-sensitive or factual, or that you are not fully certain of — news, prices, versions, releases, people, places, "what/who/when/how much" — call research FIRST and build your answer from the sources it returns, rather than answering from memory.',
+  '- After research, answer using ONLY the returned sources. If they cover it: answer confidently and briefly (this is voice — summarise, never read URLs or long text aloud). If they only partly cover it: answer what is supported and clearly mark the rest as a best guess ("mit bedste bud er…"). If they do not cover it: say you could not verify it — do NOT invent an answer.',
+  '- Do NOT reach for the web for chit-chat, opinions, things already in the CONVERSATION above, or actions on Mikkel\'s own machine (files, apps, screen). Those are fast paths — just answer or act. Speed matters; only search when the answer genuinely needs current or external facts.',
+  '- web_search and fetch_url are the lower-level pieces (search, then read a page) if you need finer control; research wraps them for the common case.',
+].join('\n');
+
+const STATIC_PROMPT = [loadPersonality(), describeEnvironment(), INTERACTION_GUIDANCE, COGNITIVE_GUIDANCE, INPUT_AND_ACTION_GUIDANCE, RETRIEVAL_GUIDANCE].filter(Boolean).join('\n\n');
 function currentSystemPrompt(): string {
   return [STATIC_PROMPT, describeTools()].filter(Boolean).join('\n\n');
 }
 
 function inferPromptQuery(messages: Array<{ role: string; content: string }>): string {
-  const userMessage = [...messages].reverse().find((message) => message.role === 'user' && !message.content.startsWith('CONTEXT —'))?.content ?? '';
+  // Key memory retrieval off Mikkel's ACTUAL question — skip the injected CONTEXT block AND the
+  // "TOOL RESULT (...)" turns pushed on loop steps ≥2, which otherwise became the RAG query mid-loop.
+  const userMessage = [...messages].reverse().find(
+    (message) => message.role === 'user'
+      && !message.content.startsWith('CONTEXT —')
+      && !message.content.startsWith('TOOL RESULT ('),
+  )?.content ?? '';
   return String(userMessage ?? '').trim().slice(0, 1000);
 }
 
