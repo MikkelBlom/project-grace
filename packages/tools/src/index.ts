@@ -37,6 +37,8 @@ import './tools/disk_usage.js';
 import './tools/weather_forecast.js';
 import './tools/list_processes.js';
 import './tools/find_duplicates.js';
+import './tools/read_document.js';
+import './tools/fact_check.js';
 import './tools/read_file.js';
 import './tools/create_tool.js';
 import './tools/create_folder.js';
