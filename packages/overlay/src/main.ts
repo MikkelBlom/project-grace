@@ -212,6 +212,27 @@ async function startServices(): Promise<void> {
     console.log(`[Grace] Filesystem index ready: ${s.indexedEntries} entries across ${s.roots.length} root(s).`);
   }).catch((e) => console.warn('[Grace] filesystem index build failed:', e));
 
+  // ── Text input mode (type to Grace instead of speaking) ──
+  // Opt-in with GRACE_TEXT_INPUT=1. Reads lines from the console and feeds them through the exact
+  // same pipeline as speech (stt:heard), so Mikkel can type when he doesn't want to talk.
+  if (process.env.GRACE_TEXT_INPUT === '1') {
+    process.stdin.setEncoding('utf-8');
+    let inputBuf = '';
+    process.stdin.on('data', (chunk: string) => {
+      inputBuf += chunk;
+      let idx: number;
+      while ((idx = inputBuf.indexOf('\n')) >= 0) {
+        const line = inputBuf.slice(0, idx).trim();
+        inputBuf = inputBuf.slice(idx + 1);
+        if (line) {
+          console.log(`[Grace] ⌨ typed: "${line}"`);
+          bus.emit('stt:heard', { text: line, confidence: 1, sessionId: `text-${Date.now()}` });
+        }
+      }
+    });
+    console.log('[Grace] ⌨ Text input mode ON — type to Grace and press Enter.');
+  }
+
   console.log('[Grace] All services online.');
   console.log(`  LLM:     ${LLM_PROVIDER}`);
   console.log(`  STT:     ${STT_PROVIDER}`);
