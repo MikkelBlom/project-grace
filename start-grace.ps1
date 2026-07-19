@@ -15,6 +15,9 @@ $env:GRACE_LLM_MODEL     = "gemma4:26b"
 $env:GRACE_WHISPER_MODEL = "large-v3"
 $env:GRACE_WHISPER_LANG  = "da"
 $env:GRACE_PYTHON_CMD    = "py"
+# Grace's own repo root, so tools resolve config/data/her-source reliably (find_path, create_tool,
+# list_workspaces, the filesystem index, STT corrections all use it instead of guessing from dist paths).
+$env:GRACE_REPO_ROOT     = $graceRoot
 
 # --- STT backend -----------------------------------------------------------
 # 'openvino' runs Whisper on the Intel Arc iGPU (GPU.0), freeing ~3GB on the RTX
