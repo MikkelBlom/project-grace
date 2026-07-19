@@ -1,0 +1,23 @@
+# Minimal SearXNG config for Grace's local, private web search.
+# The key line is search.formats including `json` — SearXNG disables the JSON API by
+# default, and Grace queries `${GRACE_SEARCH_URL}/search?...&format=json`.
+#
+# Start it:  docker compose -f docker/searxng/docker-compose.yml up -d
+# Then Grace's web_search uses http://localhost:8888 automatically (override with GRACE_SEARCH_URL).
+use_default_settings: true
+
+server:
+  # Change this for any non-local exposure. Fine as-is for a single-user localhost box.
+  secret_key: "grace-local-searxng-change-me"
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  # Enable the JSON API that Grace consumes (html kept so you can also use it in a browser).
+  formats:
+    - html
+    - json
+
+ui:
+  infinite_scroll: false
