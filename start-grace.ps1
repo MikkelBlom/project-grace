@@ -21,9 +21,9 @@ $env:GRACE_PYTHON_CMD    = "py"
 # so gemma4:26b stops thrashing. 'faster-whisper' = old CUDA path (fallback).
 $env:GRACE_STT_BACKEND   = "openvino"
 # Which converted model the OpenVINO backend loads:
-#   ...-turbo-fp16 = sub-700ms, accuracy ~= old CUDA   (recommended)
-#   ...-large-v3-fp16 = ~1.8s, best accuracy
-$env:GRACE_OV_MODEL      = "$graceRoot\models\ov-whisper-large-v3-turbo-fp16"
+#   ...-large-v3-fp16 = ~1.8s/turn, best accuracy        (ACTIVE — turbo misheard ~90% of Danish)
+#   ...-turbo-fp16    = sub-700ms, weaker on Danish      (fast fallback — swap the path below to revert)
+$env:GRACE_OV_MODEL      = "$graceRoot\models\ov-whisper-large-v3-fp16"
 $env:GRACE_OV_DEVICE     = "GPU.0"
 # Beam search width. KEEP AT 1: beams>1 is NOT implemented on the Arc iGPU
 # (OpenVINO GPU plugin throws "Not Implemented" at generate time). Accuracy gains
@@ -38,7 +38,7 @@ $env:GRACE_OV_NUM_BEAMS  = "1"
 #   "Realtek" = laptop-mik -> Buds4 forbliver STEREO til output  (anbefalet hvis mono generer)
 #   "Buds4"   = bedste mik-praecision, MEN mono-output i begge oerer (BT-begraensning)
 #   "VF0700"  = webcam-mik (daarligst)
-$env:GRACE_MIC_NAME      = "Realtek"
+$env:GRACE_MIC_NAME      = "USB Audio Device"
 
 Write-Host ""
 Write-Host "[Grace] Starting up..." -ForegroundColor Cyan

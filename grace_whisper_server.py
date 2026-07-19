@@ -73,6 +73,10 @@ parser.add_argument('--ov-device', default=os.environ.get('GRACE_OV_DEVICE', 'GP
                     help='OpenVINO device: GPU.0=Arc iGPU, CPU, NPU')
 parser.add_argument('--ov-num-beams', type=int, default=int(os.environ.get('GRACE_OV_NUM_BEAMS', '1')),
                     help='Beam width for openvino (1=greedy/fastest, >1=slower+more accurate)')
+parser.add_argument('--ov-cache', default=os.environ.get('GRACE_OV_CACHE', os.path.join(SCRIPT_DIR, 'models', '.ov-cache')),
+                    help='OpenVINO compiled-model cache dir. The Arc GPU compile is ~12-19s cold; '
+                         'caching the compiled kernels to disk cuts every later startup to ~5s. '
+                         'Set empty to disable.')
 parser.add_argument('--sample-rate', type=int, default=16000, help='Audio sample rate')
 parser.add_argument('--chunk-ms',    type=int, default=30,    help='Audio chunk size in ms (ignored — fixed at 512 samples)')
 parser.add_argument('--mic-device',  type=int, default=-1,    help='Sounddevice input device index (-1 = auto)')
@@ -144,20 +148,41 @@ def _compression_ratio(text: str) -> float:
 # ── OpenVINO backend (Intel Arc iGPU) ──────────────────────────────────────────
 class OpenVinoWhisper:
     """Whisper via OpenVINO GenAI — runs on the Arc iGPU so the RTX stays free for the LLM."""
-    def __init__(self, model_dir, device, lang, initial_prompt, hotwords, num_beams=1):
+    def __init__(self, model_dir, device, lang, initial_prompt, hotwords, num_beams=1, cache_dir=None):
         import openvino_genai as ov_genai
         self.lang = lang
-        self.pipe = ov_genai.WhisperPipeline(model_dir, device=device)
+        # CACHE_DIR persists the compiled GPU kernels so only the FIRST ever startup pays the
+        # full ~12-19s Arc compile; later startups reload the cached blobs in ~5s. Combined with
+        # the warm-up in load_models(), the compile happens before "ready", never on a real turn.
+        ov_kwargs = {}
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+            ov_kwargs["CACHE_DIR"] = cache_dir
+        self.pipe = ov_genai.WhisperPipeline(model_dir, device=device, **ov_kwargs)
         cfg = self.pipe.get_generation_config()
         cfg.task = "transcribe"
-        if lang and lang != 'auto':
+        forced_lang = bool(lang and lang != 'auto')
+        if forced_lang:
             cfg.language = f"<|{lang}|>"
-        for attr, val in (("return_timestamps", False), ("initial_prompt", initial_prompt),
-                          ("no_repeat_ngram_size", 4)):
+        for attr, val in (("return_timestamps", False), ("no_repeat_ngram_size", 4)):
             try: setattr(cfg, attr, val)
             except Exception: pass
-        if hotwords:
+        # ── STT bias vs forced-language compatibility (measured on openvino_genai 2026.2.0) ──
+        # On the OV WhisperPipeline some bias inputs SILENTLY DISABLE forced-language decoding —
+        # the pipeline reverts to auto-detect and Danish then decodes as English ("Nej" → "Night",
+        # whole sentences in English while the log still says lang=da). Verified with a Korean
+        # canary on English audio (forcing works until the toxic bias is set). Measured behaviour:
+        #   • hotwords:                       SAFE with forced language on large-v3; BREAKS it on turbo.
+        #   • multi-sentence initial_prompt:  BREAKS forced language on BOTH models.
+        # So: keep hotwords (they restore the Grace/Claude/tech-term biasing) UNLESS we're on turbo
+        # with a forced language; never apply the long initial_prompt under a forced language. In
+        # 'auto' mode there is no forcing to protect, so both are applied as before.
+        is_turbo = 'turbo' in str(model_dir).lower()
+        if hotwords and (not forced_lang or not is_turbo):
             try: cfg.hotwords = " ".join(hotwords)
+            except Exception: pass
+        if initial_prompt and not forced_lang:
+            try: cfg.initial_prompt = initial_prompt
             except Exception: pass
         # Beam search >1 is NOT implemented on the OpenVINO GPU/NPU plugins (raises
         # "Not Implemented" at generate time and crash-loops STT). Only honour it on CPU.
@@ -201,12 +226,14 @@ def load_models():
 
     # ── OpenVINO backend (Arc iGPU) ──
     if args.backend == 'openvino':
-        print(f"Loading OpenVINO Whisper ({os.path.basename(args.ov_model)} on {args.ov_device})...", file=sys.stderr)
+        cache_note = f" (cache: {args.ov_cache})" if args.ov_cache else " (no cache)"
+        print(f"Loading OpenVINO Whisper ({os.path.basename(args.ov_model)} on {args.ov_device}){cache_note}...", file=sys.stderr)
         try:
             backend = OpenVinoWhisper(args.ov_model, args.ov_device, args.lang,
-                                      BIAS_PROMPT, HOTWORDS, args.ov_num_beams)
-            # Warm up now so the device compile (~8-14s) happens at startup, not on the
-            # first utterance. Noise input — we just need to trigger compilation.
+                                      BIAS_PROMPT, HOTWORDS, args.ov_num_beams, args.ov_cache)
+            # Warm up now so the device compile happens at startup, not on the first utterance.
+            # Noise input — we just need to trigger compilation. With CACHE_DIR set this is ~5s
+            # after the first ever run; the very first run still pays the full compile once.
             warm = np.random.default_rng(42).standard_normal(SAMPLE_RATE).astype(np.float32) * 0.05
             backend.transcribe(warm)
             print(f"OpenVINO Whisper klar ({os.path.basename(args.ov_model)} / {args.ov_device}).", file=sys.stderr)
