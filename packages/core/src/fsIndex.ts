@@ -53,10 +53,40 @@ class FsIndex {
   private entries: FsEntry[] = [];
   private building = false;
   private builtAt = 0;
+  private watchers: fs.FSWatcher[] = [];
+  private watching = false;
+  private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.config = this.loadConfig();
     this.loadCache();
+  }
+
+  /** Called once at startup: build the index in the background, then watch the roots for changes. */
+  async start(): Promise<void> {
+    await this.build();
+    this.watch();
+  }
+
+  private watch(): void {
+    for (const w of this.watchers) { try { w.close(); } catch { /* already closed */ } }
+    this.watchers = [];
+    for (const rootRaw of this.config.roots) {
+      const root = path.resolve(expandHome(rootRaw));
+      if (!fs.existsSync(root)) continue;
+      try {
+        // Recursive watch is supported on Windows/macOS. persistent:false so it never keeps the
+        // process alive. Debounced rebuild coalesces bursts (installs, git checkouts, downloads).
+        const w = fs.watch(root, { recursive: true, persistent: false }, () => this.scheduleRebuild());
+        this.watchers.push(w);
+      } catch { /* recursive watch unsupported or dir too large — skip; reindex_files still works */ }
+    }
+    this.watching = true;
+  }
+
+  private scheduleRebuild(): void {
+    if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
+    this.rebuildTimer = setTimeout(() => { this.rebuildTimer = null; void this.build(); }, 15_000);
   }
 
   private defaultRoots(): string[] {
@@ -181,6 +211,7 @@ class FsIndex {
       this.config.roots.push(abs);
       this.saveConfig();
       void this.build();
+      if (this.watching) this.watch();
     }
     return { ok: true, roots: this.listRoots() };
   }
@@ -191,7 +222,7 @@ class FsIndex {
     this.config.roots = this.config.roots.filter((r) => path.resolve(expandHome(r)).toLowerCase() !== abs
       && r.toLowerCase() !== String(p ?? '').trim().toLowerCase());
     const removed = this.config.roots.length !== before;
-    if (removed) { this.saveConfig(); void this.build(); }
+    if (removed) { this.saveConfig(); void this.build(); if (this.watching) this.watch(); }
     return { ok: true, removed, roots: this.listRoots() };
   }
 

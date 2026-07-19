@@ -63,7 +63,25 @@ export class GraceCore {
   private mode: GraceMode = 'normal';
   private powerState: GracePowerState = 'active';
   private history: ConversationTurn[] = [];
-  private isProcessing = false;
+  private _isProcessing = false;
+  private processingWatchdog: ReturnType<typeof setTimeout> | null = null;
+  // Watchdog: normally `tts:done` clears isProcessing. If TTS never completes (e.g. a hung playback
+  // child), Grace would stay "processing" and go deaf forever. This forces a reset after a turn has
+  // run longer than any legitimate turn (LLM timeout is 180s), so she always recovers to listening.
+  private get isProcessing(): boolean { return this._isProcessing; }
+  private set isProcessing(v: boolean) {
+    this._isProcessing = v;
+    if (this.processingWatchdog) { clearTimeout(this.processingWatchdog); this.processingWatchdog = null; }
+    if (v) {
+      this.processingWatchdog = setTimeout(() => {
+        console.warn('[Core] ⏱ processing watchdog — a turn was stuck >240s; resetting so Grace can listen again.');
+        this._isProcessing = false;
+        this.processingWatchdog = null;
+        bus.emit('stt:resume', {});
+        bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
+      }, 240_000);
+    }
+  }
   private fieldNoteBuffer: string[] = [];
   private listenMode = false;          // "hold the floor" — buffer speech until you say you're done
   private listenBuffer: string[] = [];

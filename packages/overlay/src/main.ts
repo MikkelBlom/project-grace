@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-import { GraceCore, PowerManager, bus } from '@grace/core';
+import { GraceCore, PowerManager, bus, fsIndex } from '@grace/core';
 import { defaultConfig } from '@grace/shared';
 import { setupBridge } from './bridge.js';
 import { GraceTray } from './tray.js';
@@ -205,6 +205,12 @@ async function startServices(): Promise<void> {
 
   // ── Start STT ─────────────────────────────
   stt?.start();
+
+  // ── Filesystem index — build + watch in the background so find_file is ready ──
+  fsIndex.start().then(() => {
+    const s = fsIndex.stats();
+    console.log(`[Grace] Filesystem index ready: ${s.indexedEntries} entries across ${s.roots.length} root(s).`);
+  }).catch((e) => console.warn('[Grace] filesystem index build failed:', e));
 
   console.log('[Grace] All services online.');
   console.log(`  LLM:     ${LLM_PROVIDER}`);
