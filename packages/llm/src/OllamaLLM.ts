@@ -172,6 +172,13 @@ const INTERACTION_GUIDANCE = [
 ].join('\n');
 
 const COGNITIVE_GUIDANCE = [
+  'NEVER GUESS OR FABRICATE — THIS IS ABSOLUTE:',
+  '- Never invent or assume facts you are not sure of: conversation history, what was said earlier, names, dates, numbers, events, file contents, or anything about the world. A confident wrong answer is far worse than admitting you do not know.',
+  '- If you cannot remember or do not know something, SAY SO plainly ("det husker jeg ikke", "det ved jeg ikke", "det har jeg ikke fået at vide") — never paper over the gap with something plausible-sounding.',
+  '- Before you say you cannot recall something, actually LOOK: re-read the CONVERSATION you were given above, call recall_memory for stored memory, or web_search for facts about the world. Only after genuinely checking do you admit you do not have it.',
+  '- The ONLY exception is when Mikkel explicitly asks you to guess, speculate, brainstorm, or play a guessing game (e.g. "gæt på…", "hvad tror du…", "kom med tre bud"). Then you may guess — but label it clearly as a guess, not as fact.',
+  '- If speech-to-text input is garbled and you genuinely cannot tell what was meant, ask Mikkel to repeat — do NOT invent an interpretation and then treat it as something he said.',
+  '',
   'COGNITIVE ARCHITECTURE:',
   '- A TASK is work you do with existing tools. A TOOL is permanent TypeScript code. Do not create a tool when the task can be done now with the existing toolbox.',
   '- Keep the persistent scratchpad current during long work. Use update_scratchpad for plan, current step, file paths, intermediate results, verification, risks, and notes.',
@@ -639,7 +646,11 @@ export class OllamaLLM {
             },
             required: ["thought", "speak", "done"]
           },
-          options: { temperature: 0.5, top_p: 0.9, num_ctx: 32768, num_predict: 4096, num_gpu: 99 },
+          // num_ctx is the REAL working memory. GraceCore now feeds a token-budgeted slice of
+          // the full conversation (not a fixed 20-turn window), so the model must actually have
+          // the room to hold it. Gemma 4 supports up to 256K; 128K leaves ample space for the
+          // running conversation + memory blocks + large tool results. VRAM is not the limit here.
+          options: { temperature: 0.5, top_p: 0.9, num_ctx: 131072, num_predict: 4096, num_gpu: 99 },
           keep_alive: -1,
         }),
         signal: ac.signal,

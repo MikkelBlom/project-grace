@@ -39,6 +39,20 @@ const CTRL_PAUSE_RE  = /^(pause|pausér|pauser|sæt (det )?på pause|hold (en )?
 const CTRL_RESUME_RE = /^(fortsæt|forsæt|kør videre|genoptag|resume)\b/i;
 const CTRL_STATUS_RE = /^(status|statusrapport|hvor langt er du( med.*)?|giv (mig )?(en )?status(rapport)?)\b/i;
 
+// ── Context-window management ────────────────────────────────────────────────
+// The LLM runs with num_ctx = 128K. Grace feeds it as much REAL conversation as fits in a
+// generous token budget (newest-first) instead of a fixed 20-turn window. Only when a
+// conversation genuinely outgrows the budget — many hours of talk — do the oldest turns fold
+// into a rolling summary so their facts survive instead of silently dropping out of context.
+const LLM_HISTORY_TOKEN_BUDGET = 80_000;   // ~80K tokens of verbatim history; leaves ~48K of the
+                                           // 128K window for the system prompt, memory blocks,
+                                           // large tool results and the reply. Covers hours of speech.
+const TURN_TOKEN_OVERHEAD = 4;             // per-turn role/message framing
+function estimateTokens(text: string): number {
+  // Cheap char-based estimate (~4 chars/token) — matches the heuristics used elsewhere in Grace.
+  return Math.ceil((text?.length ?? 0) / 4) + TURN_TOKEN_OVERHEAD;
+}
+
 export class GraceCore {
   private config: GraceConfig;
   private mode: GraceMode = 'normal';
@@ -50,6 +64,11 @@ export class GraceCore {
   private listenBuffer: string[] = [];
   private memory = new GraceMemory();
   private sessionId = `sess-${Date.now()}`;
+  // Rolling summary of conversation turns that have aged out of the live token budget. Empty until
+  // a conversation actually overflows (rare). summarizedThrough = count of leading history turns
+  // already folded into rollingSummary, so we never re-summarise the same turn twice.
+  private rollingSummary = '';
+  private summarizedThrough = 0;
   // Voice barge-in: keep the mic OPEN while Grace speaks so a spoken "stop" lands mid-sentence.
   // Safe when output is in-ear (earbuds) + mic is the laptop's — on laptop SPEAKERS this would
   // feed her own voice back, so it's opt-in. Enable with GRACE_VOICE_BARGEIN=1.
@@ -63,8 +82,10 @@ export class GraceCore {
   // ── Init ────────────────────────────────────
 
   private init(): void {
-    // Restore recent conversation so context + memory survive restarts.
-    const restored = this.memory.recentTurns(4);
+    // Restore recent conversation so context + memory survive restarts. Restore generously — the
+    // LLM's token budget (not this count) governs how much is actually shown, and spoken turns are
+    // short, so this gives real cross-session continuity instead of the old 4-turn stub.
+    const restored = this.memory.recentTurns(500);
     if (restored.length) {
       this.history = restored.map(t => ({
         role: t.role, content: t.content,
@@ -74,7 +95,7 @@ export class GraceCore {
     }
 
     // ── STT → route based on power state ──────
-    bus.on('stt:heard', ({ text, sessionId }) => {
+    bus.on('stt:heard', async ({ text, sessionId }) => {
       if (this.powerState === 'paused' || this.powerState === 'sleeping') {
         return; // Grace is fully off — ignore
       }
@@ -140,11 +161,9 @@ export class GraceCore {
         this.memory.addTurn(this.sessionId, 'user', utterance);
       }
 
-      // Build a compact history snapshot for the LLM (last 20 turns)
-      const historySnapshot = this.history.slice(-20).map(t => ({
-        role: t.role === 'grace' ? 'assistant' : 'user',
-        content: t.content,
-      }));
+      // Feed the LLM as much real conversation as fits its token budget (not a fixed 20-turn
+      // window) — older turns fold into a rolling summary rather than vanishing from context.
+      const historySnapshot = await this.buildHistoryForLLM();
 
       bus.emit('overlay:show', { type: 'thinking' });
       bus.emit('llm:thinking', { sessionId, text: utterance, history: historySnapshot });
@@ -216,7 +235,7 @@ export class GraceCore {
     bus.on('control:resume', () => { bus.emit('overlay:show', { type: 'thinking' }); });
 
     // Toggle listen mode from a hotkey or the enter_listen_mode tool.
-    bus.on('control:listenMode', ({ on }) => {
+    bus.on('control:listenMode', async ({ on }) => {
       if (on && !this.listenMode) this.enterListenMode(`ctl-${Date.now()}`);
       else if (!on && this.listenMode) {
         const combined = this.exitListenMode(false);
@@ -224,7 +243,7 @@ export class GraceCore {
           this.isProcessing = true;
           this.history.push({ role: 'user', content: combined, timestamp: new Date(), sessionId: this.sessionId, persist: true });
           this.memory.addTurn(this.sessionId, 'user', combined);
-          const snap = this.history.slice(-20).map(t => ({ role: t.role === 'grace' ? 'assistant' : 'user', content: t.content }));
+          const snap = await this.buildHistoryForLLM();
           bus.emit('overlay:show', { type: 'thinking' });
           bus.emit('llm:thinking', { sessionId: this.sessionId, text: combined, history: snap });
         } else {
@@ -356,6 +375,86 @@ export class GraceCore {
       'Hey Mikkel, I am up and ready to go. What is on your mind?',
     ];
     return lines[Math.floor(Math.random() * lines.length)]!;
+  }
+
+  // ── Context-window assembly ────────────────────────────────────────────────
+  // Build the history the LLM actually sees: as many of the most-recent turns as fit in the token
+  // budget, in chronological order. If older turns must be dropped, they are first folded into a
+  // rolling summary that is prepended, so no earlier fact is lost.
+  private async buildHistoryForLLM(): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+    const turns = this.history;
+
+    // Walk newest → oldest, keeping turns until the budget is spent.
+    let used = 0;
+    let keepFrom = turns.length;
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const cost = estimateTokens(turns[i]!.content);
+      if (used + cost > LLM_HISTORY_TOKEN_BUDGET && keepFrom < turns.length) break;
+      used += cost;
+      keepFrom = i;
+    }
+
+    // Anything before keepFrom drops out of the verbatim window — fold the not-yet-summarised
+    // dropped turns into the rolling summary so their facts persist (only fires on real overflow).
+    if (keepFrom > this.summarizedThrough) {
+      const toFold = turns.slice(this.summarizedThrough, keepFrom);
+      if (toFold.length) {
+        this.rollingSummary = await this.summarizeTurns(this.rollingSummary, toFold);
+        this.summarizedThrough = keepFrom;
+      }
+    }
+
+    const kept: Array<{ role: 'user' | 'assistant'; content: string }> = turns.slice(keepFrom).map(t => ({
+      role: t.role === 'grace' ? 'assistant' : 'user',
+      content: t.content,
+    }));
+
+    if (this.rollingSummary && keepFrom > 0) {
+      kept.unshift({
+        role: 'user',
+        content: `CONVERSATION SO FAR — summary of earlier parts of this conversation (older messages that no longer fit verbatim). Treat these as things that were actually said; do not contradict or forget them:\n${this.rollingSummary}`,
+      });
+    }
+    return kept;
+  }
+
+  // Summarise turns that have aged out of the live budget, folding in any prior summary, via a
+  // lightweight tool-free Ollama call. Only runs on genuine overflow (rare), so the added latency
+  // is acceptable. GraceCore and OllamaLLM are bus-decoupled, so this talks to Ollama directly
+  // using the same env config the LLM adapter uses.
+  private async summarizeTurns(existingSummary: string, toFold: ConversationTurn[]): Promise<string> {
+    const transcript = toFold.map(t => `${t.role === 'grace' ? 'Grace' : 'Mikkel'}: ${t.content}`).join('\n');
+    const prior = existingSummary ? `EXISTING SUMMARY so far:\n${existingSummary}\n\n` : '';
+    const prompt =
+      `${prior}EARLIER CONVERSATION TURNS to fold into the summary:\n${transcript}\n\n` +
+      `Write a single updated summary of the conversation so far, in Danish. Preserve every concrete ` +
+      `fact, decision, name, number and preference, and anything Mikkel might refer back to. Be concise ` +
+      `but do NOT drop facts. Output only the summary text, nothing else.`;
+    try {
+      const url = process.env.GRACE_OLLAMA_URL ?? 'http://localhost:11434';
+      const model = process.env.GRACE_LLM_MODEL ?? this.config.llm.model ?? 'gemma4:26b';
+      const res = await fetch(`${url}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model, prompt, stream: false, think: false,
+          options: { temperature: 0.2, num_ctx: 131072, num_predict: 1024 },
+          keep_alive: -1,
+        }),
+      });
+      if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+      const data = await res.json() as { response?: string };
+      const summary = (data.response ?? '').trim();
+      if (summary) {
+        console.log(`[Core] 🧵 Folded ${toFold.length} aged-out turn(s) into rolling summary (${summary.length} chars).`);
+        return summary;
+      }
+    } catch (err) {
+      console.warn('[Core] Rolling-summary failed — keeping a raw transcript fallback:', err);
+    }
+    // Fallback: if summarisation fails, keep a compact raw transcript so facts still survive.
+    const rawFold = toFold.map(t => `${t.role === 'grace' ? 'Grace' : 'Mikkel'}: ${t.content}`).join('\n');
+    return [existingSummary, rawFold].filter(Boolean).join('\n');
   }
 
   getMode(): GraceMode { return this.mode; }
