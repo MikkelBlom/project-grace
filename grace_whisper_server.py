@@ -201,7 +201,17 @@ class OpenVinoWhisper:
         lang = self.lang if (self.lang and self.lang != 'auto') else 'da'
         if text and _compression_ratio(text) > 2.6:   # looping hallucination guard
             return '', lang, 0.0
-        return text, lang, 0.85
+        # Best-effort confidence from the pipeline's sequence score if this openvino_genai build
+        # exposes it (versions vary); else a neutral value. Feeds the Ja/Nej safety re-ask gate.
+        conf = 0.85
+        try:
+            import math
+            scores = getattr(res, 'scores', None)
+            if scores:
+                conf = max(0.0, min(1.0, math.exp(float(scores[0]) / max(1, len(text.split())))))
+        except Exception:
+            conf = 0.85
+        return text, lang, conf
 
 # ── Load models ────────────────────────────────────────────────────────────────
 
@@ -469,7 +479,14 @@ def _do_transcribe(model, audio_np):
     # Consume generator once
     segs_list = list(segments)
     full_text = ' '.join(seg.text.strip() for seg in segs_list).strip()
-    confidence = 0.85
+    # Real confidence from the model's mean token log-probability (was hardcoded 0.85). exp() maps
+    # avg_logprob (~ -0.2 good ... -1.0 poor) to a 0-1 pseudo-probability the Ja/Nej safety gate uses.
+    if segs_list:
+        import math
+        avg_lp = sum(getattr(s, 'avg_logprob', -0.5) for s in segs_list) / len(segs_list)
+        confidence = max(0.0, min(1.0, math.exp(avg_lp)))
+    else:
+        confidence = 0.0
     return full_text, info.language or args.lang, confidence
 
 def transcribe(whisper_model, audio_np: np.ndarray):

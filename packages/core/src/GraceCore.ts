@@ -43,6 +43,9 @@ const CTRL_STATUS_RE = /^(status|statusrapport|hvor langt er du( med.*)?|giv (mi
 // Language switch by voice (instant, no LLM round-trip). English mode for English-speaking guests.
 const CTRL_LANG_EN_RE = /^(switch to english|talk(ing)? english|speak(ing)? english|let'?s speak english|in english( now| please)?|english (please|now|mode)|kan (vi|du) (snakke|tale) engelsk)\b/i;
 const CTRL_LANG_DA_RE = /^(skift til dansk|tal(er)? dansk|på dansk( igen| nu| tak)?|snak(ker)? dansk|dansk (igen|nu|tak|mode)|switch to danish|speak danish|danish (please|now|mode))\b/i;
+// Short, safety-critical words: a misheard one of these could gate a file deletion. If STT reports
+// low confidence for a bare one of these, we re-ask instead of acting on a guess.
+const CRITICAL_YESNO_RE = /^(ja|jo|nej|nå|jaja|yes|yeah|yep|no|nope|slet( den| dem)?|delete|gør det|do it|bekræft|confirm|okay|ok)\.?$/i;
 
 // ── Context-window management ────────────────────────────────────────────────
 // The LLM runs with num_ctx = 128K. Grace feeds it as much REAL conversation as fits in a
@@ -63,6 +66,9 @@ export class GraceCore {
   private mode: GraceMode = 'normal';
   private powerState: GracePowerState = 'active';
   private history: ConversationTurn[] = [];
+  // STT confidence below this, for a short critical yes/no/confirm word, triggers a re-ask instead
+  // of acting (see the safety gate in stt:heard). Tune once the whisper server emits real logprobs.
+  private static readonly LOW_STT_CONFIDENCE = 0.55;
   private _isProcessing = false;
   private processingWatchdog: ReturnType<typeof setTimeout> | null = null;
   // Watchdog: normally `tts:done` clears isProcessing. If TTS never completes (e.g. a hung playback
@@ -121,7 +127,7 @@ export class GraceCore {
     }
 
     // ── STT → route based on power state ──────
-    bus.on('stt:heard', async ({ text: rawText, sessionId }) => {
+    bus.on('stt:heard', async ({ text: rawText, sessionId, confidence }) => {
       // Deterministic post-ASR correction (Mikkel's curated name/term fixes) before anything else.
       const text = sttCorrections.apply(rawText);
       if (this.powerState === 'paused' || this.powerState === 'sleeping') {
@@ -131,6 +137,18 @@ export class GraceCore {
       if (this.powerState === 'field-notes') {
         // Battery mode: save raw note, no LLM
         this.saveFieldNote(text, sessionId);
+        return;
+      }
+
+      // Safety gate: a short, critical yes/no/confirm word heard with LOW confidence can gate a
+      // delete — never act on a guess. Ask Mikkel to repeat rather than pass an ambiguous signal on.
+      if (typeof confidence === 'number' && confidence < GraceCore.LOW_STT_CONFIDENCE
+          && CRITICAL_YESNO_RE.test(text.trim())) {
+        console.warn(`[Core] ⚠ low-confidence critical word "${text}" (conf=${confidence.toFixed(2)}) — re-asking instead of acting`);
+        bus.emit('tts:speaking', {
+          text: settings.language === 'da' ? 'Undskyld, det hørte jeg ikke helt — kan du gentage?' : "Sorry, I didn't quite catch that — can you repeat?",
+          sessionId,
+        });
         return;
       }
 
