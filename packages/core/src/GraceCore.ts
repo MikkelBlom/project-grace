@@ -10,7 +10,7 @@
 
 
 import { bus } from './EventBus.js';
-import { GraceMemory } from './memory.js';
+import { graceMemory } from './memory.js';
 import type { GraceConfig, GraceMode, GracePowerState, ConversationTurn } from '@grace/shared';
 
 // Hold-the-floor / "listen mode" trigger phrases (case-insensitive, DA + EN).
@@ -62,7 +62,10 @@ export class GraceCore {
   private fieldNoteBuffer: string[] = [];
   private listenMode = false;          // "hold the floor" — buffer speech until you say you're done
   private listenBuffer: string[] = [];
-  private memory = new GraceMemory();
+  // Use the shared singleton — OllamaLLM, recall_memory and every tool read/write the SAME
+  // GraceMemory. A second `new GraceMemory()` here used to fight the singleton over the same
+  // JSON files (last-writer-wins races; same-session recall returning nothing when Chroma was down).
+  private memory = graceMemory;
   private sessionId = `sess-${Date.now()}`;
   // Rolling summary of conversation turns that have aged out of the live token budget. Empty until
   // a conversation actually overflows (rare). summarizedThrough = count of leading history turns

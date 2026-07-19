@@ -468,7 +468,11 @@ class ChromaBridge {
     try {
       const list = await this.fetchJson(`${CHROMA_URL}/api/v1/collections`);
       const items = Array.isArray(list) ? list : (Array.isArray(list?.collections) ? list.collections : []);
-      const match = items.find((item: any) => item?.name === colName || item?.id || item?.collection_id);
+      // Match strictly by NAME. The old `|| item?.id || item?.collection_id` short-circuited on the
+      // first collection that had ANY id, so after a restart (≥2 collections exist) every namespace
+      // resolved to the first-listed collection — silently collapsing conversation/profile/task/
+      // personality onto one store.
+      const match = items.find((item: any) => item?.name === colName);
       const id = match?.id ?? match?.collection_id ?? match?.name ?? null;
       if (id) {
         this.collectionIds.set(colName, String(id));
@@ -516,6 +520,12 @@ class ChromaBridge {
     }
   }
 
+  /** Public one-shot embed so a caller can embed a query ONCE and reuse the vector across
+   *  several collection queries — avoids re-embedding per namespace on the GPU hot path. */
+  async embedQuery(text: string): Promise<number[]> {
+    return this.embed(text);
+  }
+
   async upsert(record: SemanticRecord): Promise<void> {
     const collectionId = await this.getCollectionId(record.namespace);
     if (!collectionId) return;
@@ -538,11 +548,11 @@ class ChromaBridge {
     }
   }
 
-  async query(query: string, limit: number, namespace: string): Promise<Array<{ id: string; score: number; metadata: any; document: string }>> {
+  async query(query: string, limit: number, namespace: string, precomputed?: number[]): Promise<Array<{ id: string; score: number; metadata: any; document: string }>> {
     const collectionId = await this.getCollectionId(namespace);
     if (!collectionId) return [];
     try {
-      const embedding = await this.embed(query);
+      const embedding = precomputed ?? await this.embed(query);
       const result = await this.fetchJson(`${CHROMA_URL}/api/v1/collections/${encodeURIComponent(collectionId)}/query`, {
         method: 'POST',
         body: JSON.stringify({
@@ -956,10 +966,19 @@ export class GraceMemory {
     const minScore = typeof options.minScore === 'number' ? options.minScore : 0.40;
     const recencyWeight = Math.max(0, Math.min(1, typeof options.recencyWeight === 'number' ? options.recencyWeight : 0.25));
 
+    // Embed the query ONCE and reuse the vector across every namespace, instead of re-embedding
+    // per collection (was 4× per search on the GPU hot path). Skip embedding entirely when Chroma
+    // is unavailable — the local keyword journal below still answers.
     const chromaHits: any[] = [];
-    for (const ns of namespaces) {
-      const hits = await this.chroma.query(clean, 50, ns);
-      chromaHits.push(...hits);
+    if (await this.chroma.ensureReady()) {
+      let sharedEmbedding: number[] | undefined;
+      try { sharedEmbedding = await this.chroma.embedQuery(clean); } catch { /* fall back to local recall */ }
+      if (sharedEmbedding) {
+        for (const ns of namespaces) {
+          const hits = await this.chroma.query(clean, 50, ns, sharedEmbedding);
+          chromaHits.push(...hits);
+        }
+      }
     }
     
     const chromaCandidates = chromaHits
@@ -1011,9 +1030,12 @@ export class GraceMemory {
       if (!current || enriched.score > current.score) combined.set(enriched.id, enriched);
     }
 
+    // Honour the caller's limit (was hard-coded to 80 — the option was silently ignored, so up to
+    // 80 memory lines could be injected into every prompt).
+    const limit = Math.max(1, options.limit ?? 20);
     return [...combined.values()]
       .sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt)
-      .slice(0, 80);
+      .slice(0, limit);
   }
 
   private workspaceBlock(workspace: ScratchpadState): string {
@@ -1067,7 +1089,8 @@ export class GraceMemory {
       const profileBlock = this.profileBlock(profile);
       if (profileBlock) blocks.push(profileBlock);
     }
-    const hits = await this.search(query, { limit: options.limit, namespace: options.namespace ?? 'all' });
+    // Inject only the top handful of memories into each prompt (was up to 80 lines of bloat).
+    const hits = await this.search(query, { limit: options.limit ?? 8, namespace: options.namespace ?? 'all' });
     const memoryBlock = this.memoryBlock(hits);
     if (memoryBlock) blocks.push(memoryBlock);
     return blocks;
