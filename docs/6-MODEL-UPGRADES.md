@@ -43,11 +43,13 @@ TODO (code): a Danish TTS server exposing the **same** `/synthesize` + `/speak` 
 `grace_kokoro_server.py`; point `GRACE_TTS_DA_URL` at it. Then `GRACE_DEFAULT_LANGUAGE=da` to make
 Danish the at-home default (English stays one "switch to English" away).
 
-## Integration checklist
-- [ ] Convert Røst-v3 → OV, set `GRACE_OV_MODEL`, live-test Danish incl. Ja/Nej
-- [ ] Build `grace_embed_server.py`, repoint `embed()`, re-index memory
-- [ ] Build Danish TTS server, set `GRACE_TTS_DA_URL`, then `GRACE_DEFAULT_LANGUAGE=da`
-- [ ] Optional: `gemma4:12b` if 26B leaves too little headroom for normal PC use
+## Status — done 2026-07-19 (models downloaded + wired; needs a live voice test)
+- [x] **Røst-v3 → OpenVINO converted** (`models/ov-roest-v3-whisper-1.5b-fp16`) and set ACTIVE in `start-grace.ps1` (`GRACE_OV_MODEL`). Fallback to large-v3 is one line away. **Live-test Danish incl. Ja/Nej.**
+- [x] **Danish TTS**: Piper voice downloaded (`models/piper/`), `grace_da_tts_server.py` built (same API as Kokoro), launched by `start-grace.ps1`, `GRACE_TTS_DA_URL` set, and `GRACE_DEFAULT_LANGUAGE=da`. English stays one "switch to English" away.
+- [x] **Embedder**: `grace_embed_server.py` (fastembed) + `intfloat/multilingual-e5-large` downloaded; `embed()` is pluggable via `GRACE_EMBED_URL`. **Left OFF by default** in the launcher because e5-large is 1024-dim vs nomic's 768 — enabling it needs a one-time Chroma reset first: `docker compose -f docker/chroma/docker-compose.yml down -v`, then uncomment the two lines in `start-grace.ps1`.
+- [ ] Optional: `gemma4:12b` if 26B leaves too little headroom for normal PC use.
+
+**First live run:** the STT model + reply-language + Danish voice all change at once, so validate on your voice (esp. Ja/Nej). If Røst misbehaves on the Arc iGPU, swap `GRACE_OV_MODEL` back to large-v3.
 
 ## Env vars (already read by the code)
 `GRACE_OV_MODEL`, `GRACE_WHISPER_LANG`, `GRACE_EMBED_MODEL`/`GRACE_EMBED_URL`, `GRACE_TTS_DA_URL`,

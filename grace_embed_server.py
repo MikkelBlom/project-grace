@@ -20,7 +20,7 @@ import argparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='intfloat/multilingual-e5-base', help='fastembed model name')
+parser.add_argument('--model', default='intfloat/multilingual-e5-large', help='fastembed model name (e5-large is fastembed-supported + SEB top pick)')
 parser.add_argument('--port', type=int, default=8770)
 args = parser.parse_args()
 

@@ -18,15 +18,22 @@ $env:GRACE_PYTHON_CMD    = "py"
 # Grace's own repo root, so tools resolve config/data/her-source reliably (find_path, create_tool,
 # list_workspaces, the filesystem index, STT corrections all use it instead of guessing from dist paths).
 $env:GRACE_REPO_ROOT     = $graceRoot
+# Default reply language. 'da' now that the Danish TTS backend (grace_da_tts_server.py) is wired —
+# say "switch to English" for English-speaking guests. Set 'en' to default to English.
+$env:GRACE_DEFAULT_LANGUAGE = "da"
+# Danish TTS backend (Piper). KokoroTTS routes Danish replies here; English stays on Kokoro.
+$env:GRACE_TTS_DA_URL    = "http://localhost:8766"
+$env:GRACE_TTS_DA_VOICE  = "da_DK"
 
 # --- STT backend -----------------------------------------------------------
 # 'openvino' runs Whisper on the Intel Arc iGPU (GPU.0), freeing ~3GB on the RTX
 # so gemma4:26b stops thrashing. 'faster-whisper' = old CUDA path (fallback).
 $env:GRACE_STT_BACKEND   = "openvino"
 # Which converted model the OpenVINO backend loads:
-#   ...-large-v3-fp16 = ~1.8s/turn, best accuracy        (ACTIVE — turbo misheard ~90% of Danish)
-#   ...-turbo-fp16    = sub-700ms, weaker on Danish      (fast fallback — swap the path below to revert)
-$env:GRACE_OV_MODEL      = "$graceRoot\models\ov-whisper-large-v3-fp16"
+#   ...-roest-v3-whisper-1.5b-fp16 = Danish fine-tune, ~2-2.5x better Danish WER   (ACTIVE)
+#   ...-whisper-large-v3-fp16      = general multilingual, best if Roest misbehaves (fallback)
+#   ...-whisper-large-v3-turbo-fp16= fastest, weakest on Danish
+$env:GRACE_OV_MODEL      = "$graceRoot\models\ov-roest-v3-whisper-1.5b-fp16"
 $env:GRACE_OV_DEVICE     = "GPU.0"
 # Beam search width. KEEP AT 1: beams>1 is NOT implemented on the Arc iGPU
 # (OpenVINO GPU plugin throws "Not Implemented" at generate time). Accuracy gains
@@ -78,8 +85,21 @@ $kokoro = Start-Process -FilePath "py" -ArgumentList $kokoroArgs -PassThru -NoNe
     -RedirectStandardOutput "$logsDir\kokoro.log" `
     -RedirectStandardError "$logsDir\kokoro-err.log"
 
-# Start Grace immediately (Kokoro loads in the background but accepts HTTP instantly)
-Write-Host "[Kokoro] Starting TTS server..." -ForegroundColor Gray
+# --- Start Danish TTS server (Piper) ---
+Write-Host "[da-tts] Starting Danish TTS server..." -ForegroundColor Gray
+$daTtsScript = Join-Path $graceRoot "grace_da_tts_server.py"
+$daTts = Start-Process -FilePath "py" -ArgumentList "-3.12 `"$daTtsScript`" --port 8766" -PassThru -NoNewWindow `
+    -RedirectStandardOutput "$logsDir\da-tts.log" -RedirectStandardError "$logsDir\da-tts-err.log"
+
+# --- Optional: off-GPU embedder (multilingual-e5-large, CPU) ---
+# Moves embeddings off the RTX (the documented latency win). NOTE: e5-large is 1024-dim vs nomic's
+# 768, so enabling it needs a ONE-TIME Chroma reset first (the collection dimension changes):
+#     docker compose -f docker/chroma/docker-compose.yml down -v
+# then uncomment the two lines below:
+# $env:GRACE_EMBED_URL = "http://localhost:8770"
+# $embed = Start-Process -FilePath "py" -ArgumentList "-3.12 `"$graceRoot\grace_embed_server.py`" --port 8770" -PassThru -NoNewWindow -RedirectStandardOutput "$logsDir\embed.log" -RedirectStandardError "$logsDir\embed-err.log"
+
+# Start Grace immediately (servers load in the background but accept HTTP instantly)
 # --- Start Grace ---
 Write-Host "[Grace]  Starting Electron app..." -ForegroundColor Cyan
 Write-Host ""
@@ -95,6 +115,13 @@ try {
     if ($null -ne $kokoro -and -not $kokoro.HasExited) {
         Stop-Process -Id $kokoro.Id -Force -ErrorAction SilentlyContinue
         Write-Host "[Kokoro] Stopped." -ForegroundColor Gray
+    }
+    if ($null -ne $daTts -and -not $daTts.HasExited) {
+        Stop-Process -Id $daTts.Id -Force -ErrorAction SilentlyContinue
+        Write-Host "[da-tts] Stopped." -ForegroundColor Gray
+    }
+    if ($null -ne $embed -and -not $embed.HasExited) {
+        Stop-Process -Id $embed.Id -Force -ErrorAction SilentlyContinue
     }
 
     Write-Host "[Grace] Done." -ForegroundColor Gray
