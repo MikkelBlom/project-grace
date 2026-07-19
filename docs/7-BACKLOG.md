@@ -1,10 +1,8 @@
 # Grace — Autonomous Backlog
 
-> **Done 2026-07-19 session:** A (unit + smoke tests, `npm run test`/`npm run smoke`),
-> search_content, system_status, recent_files, notes, todo, wikipedia, translate, define,
-> draft_email; remove dead chat()/chatStream(); debounce journal writes; parallelize research
-> fetches; pluggable embedder (GRACE_EMBED_URL) + grace_embed_server.py; text-input mode
-> (GRACE_TEXT_INPUT=1); refresh 3-TOOLS.md. Remaining items below.
+> **✅ BACKLOG COMPLETE (2026-07-19).** Everything below (A–J) is implemented, tested, and pushed,
+> plus the model downloads (Røst STT, Piper Danish TTS, e5 embedder) — wired in start-grace.ps1,
+> pending a live voice test. 85 tools. New ideas → docs/10-IDEAS.md. Items kept below for history.
 
 
 Self-contained work items Claude can build + validate headlessly (build-green + unit/smoke tests).

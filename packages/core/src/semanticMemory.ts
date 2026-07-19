@@ -1157,6 +1157,23 @@ export class GraceMemory {
     return record;
   }
 
+  /** Remove near-duplicate semantic records (same text), keeping the most recent copy of each. */
+  consolidate(): { before: number; after: number; removed: number } {
+    const before = this.semanticJournal.length;
+    const seen = new Set<string>();
+    const kept: SemanticRecord[] = [];
+    for (const r of [...this.semanticJournal].reverse()) { // newest-first so we keep the latest copy
+      const key = normalizeWhitespace(r.text).toLowerCase().slice(0, 400);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      kept.push(r);
+    }
+    kept.reverse();
+    this.semanticJournal = kept;
+    this.saveSemanticJournal();
+    return { before, after: kept.length, removed: before - kept.length };
+  }
+
   getStateSummary(): {
     engine: 'sqlite' | 'json';
     semanticEngine: 'chroma' | 'local';
