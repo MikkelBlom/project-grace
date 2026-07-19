@@ -1,6 +1,11 @@
 import { registerTool } from '../registry.js';
 import { htmlToText, decodeEntities } from '../lib/web.js';
 
+// Short-lived cache so research's parallel fetches (and repeated reads of the same page within a
+// session) don't re-download. Keyed by url+cap; evicted after 5 min or when the cache grows large.
+const CACHE_TTL_MS = 5 * 60_000;
+const cache = new Map<string, { at: number; value: unknown }>();
+
 // Fetch a web page and return its readable text (boilerplate removed, entities decoded).
 registerTool({
   name: 'fetch_url',
@@ -14,6 +19,9 @@ registerTool({
     if (!/^https?:\/\//i.test(url)) return { error: 'a valid http(s) url is required' };
     const n = Number(args.maxChars);
     const cap = args.maxChars != null && Number.isFinite(n) ? Math.max(200, Math.min(20000, Math.floor(n))) : 6000;
+    const key = `${url}|${cap}`;
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
     let res: Response;
     try {
       res = await fetch(url, {
@@ -25,6 +33,9 @@ registerTool({
     const html = await res.text();
     const title = decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '').replace(/\s+/g, ' ').trim();
     const text = htmlToText(html, cap);
-    return { url, title, chars: text.length, text };
+    const value = { url, title, chars: text.length, text };
+    cache.set(key, { at: Date.now(), value });
+    if (cache.size > 200) cache.delete(cache.keys().next().value as string);
+    return value;
   },
 });

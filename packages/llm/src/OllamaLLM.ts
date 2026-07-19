@@ -586,8 +586,7 @@ export class OllamaLLM {
         if (lastToolNote) {
           this.lastToolContext = lastToolNote;
           // Extract resolved absolute paths so the model reuses exact paths, not STT re-derivations.
-          const pathMatches = lastToolNote.match(/(?:[A-Z]:\\[^\s"',}\]]+|(?:\/[^\s"',}\]]+){2,})/g) || [];
-          this.lastResolvedPaths = [...new Set(pathMatches)];
+          this.lastResolvedPaths = this.extractAbsolutePaths(lastToolNote);
         }
 
         // Fix 5: If we exhausted MAX_STEPS without a final answer, be honest.
@@ -724,7 +723,8 @@ export class OllamaLLM {
   }
 
   private extractAbsolutePaths(text: string): string[] {
-    const matches = String(text ?? '').match(/(?:[A-Z]:\\[^\s"',}\]]+|\/[^\s"',}\]]+)/g) || [];
+    // Windows drive paths, or unix paths of ≥2 segments (so a bare "/foo" isn't a false positive).
+    const matches = String(text ?? '').match(/(?:[A-Z]:\\[^\s"',}\]]+|(?:\/[^\s"',}\]]+){2,})/g) || [];
     return [...new Set(matches)];
   }
 
