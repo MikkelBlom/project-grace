@@ -22,6 +22,7 @@ import './tools/set_language.js';
 import './tools/add_stt_correction.js';
 import './tools/find_file.js';
 import './tools/index_folders.js';
+import './tools/focus.js';
 import './tools/read_file.js';
 import './tools/create_tool.js';
 import './tools/create_folder.js';
