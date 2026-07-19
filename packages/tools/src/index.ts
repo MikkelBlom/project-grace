@@ -43,6 +43,7 @@ import './tools/eye_pause.js';
 import './tools/mood.js';
 import './tools/story.js';
 import './tools/summarize_session.js';
+import './tools/browse_memory.js';
 import './tools/read_file.js';
 import './tools/create_tool.js';
 import './tools/create_folder.js';

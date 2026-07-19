@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-import { GraceCore, PowerManager, bus, fsIndex } from '@grace/core';
+import { GraceCore, PowerManager, bus, fsIndex, validateConfigs } from '@grace/core';
 import { defaultConfig } from '@grace/shared';
 import { setupBridge } from './bridge.js';
 import { GraceTray } from './tray.js';
@@ -157,6 +157,9 @@ async function startServices(): Promise<void> {
   console.log(`|     Project Grace -- Phase ${phase}        |`);
   console.log(`|  STT:${STT_PROVIDER.padEnd(7)} LLM:${LLM_PROVIDER.padEnd(7)} TTS:${TTS_PROVIDER.padEnd(6)} |`);
   console.log('+--------------------------------------+\n');
+
+  // ── Validate config files up front (warn on any malformed JSON) ──
+  validateConfigs();
 
   // ── Core orchestrator ──────────────────────
   core = new GraceCore(defaultConfig);

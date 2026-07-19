@@ -420,6 +420,9 @@ class ChromaBridge {
     }
   }
 
+  /** True once Chroma is confirmed up and not disabled — used for honest telemetry. */
+  isActive(): boolean { return this.ready && !this.disabled; }
+
   async ensureReady(): Promise<boolean> {
     if (this.ready) return true;
     if (this.disabled) return false;   // already gave up — never block conversation again
@@ -1163,7 +1166,7 @@ export class GraceMemory {
   } {
     return {
       engine: this.engine,
-      semanticEngine: this.semanticEngine,
+      semanticEngine: this.chroma.isActive() ? 'chroma' : 'local', // real state, not the hardcoded field
       activeWorkspaceId: this.state.activeWorkspaceId,
       profileFacts: this.state.profile.facts.length,
       semanticRecords: this.semanticJournal.length,
