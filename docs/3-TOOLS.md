@@ -52,14 +52,21 @@ Then run `npm run build`.
 
 ---
 
-## 2. Currently Implemented Tools (46)
-*Grace has an expansive local toolkit for OS operations, web requests, and autonomous development.*
-- **File/OS Operations**: `read_file`, `write_file`, `edit_file`, `move_file`, `delete_file`, `write_files`, `search_files`, `find_path`, `list_dir`, `create_folder`, `open_path`, `open_browser`, `clipboard_read`, `clipboard_write`, `organize_files_by_extension`.
-- **Web & Info**: `web_search`, `fetch_url`, `get_weather`, `get_location`, `get_current_time`, `news_fetcher`, `temperature_converter`, `date_difference_calculator`, `roll_dice`.
-- **Memory & Personality**: `recall_memory`, `reflect_on_session`, `update_user_profile`, `update_personality`.
-- **Autonomy & Workspaces**: `start_background_task`, `task_status`, `cancel_task`, `mission_control`, `create_tool`, `git_commit`, `index_projects`, `list_workspaces`, `update_scratchpad`, `export_scratchpad`, `get_scratchpad`, `verify_mutation`, `summarize_and_extract`.
-- **UI Overlay & Vision**: `take_screenshot` (active/all/primary/by-number), `analyze_screen` (gemma4 native vision — describe + find element bounding box), `focus_box` (animated fly-in highlight, routed per-monitor), `get_active_context` (active app/title/fullscreen + optional selected text).
-- **System**: `enter_listen_mode`.
+## 2. Currently Implemented Tools (68)
+*Grace has an expansive local toolkit for OS operations, retrieval, productivity, and autonomous development.*
+- **File / OS**: `read_file`, `write_file`, `write_files`, `edit_file`, `move_file`, `delete_file`, `create_folder`, `list_dir`, `find_path`, `open_path`, `open_browser`, `clipboard_read`, `clipboard_write`, `organize_files_by_extension`.
+- **Find & search**: `find_file` (fast index lookup), `search_files` (live name walk), `search_content` (grep inside files), `recent_files`, `index_projects`.
+- **Filesystem index**: `add_indexed_folder`, `remove_indexed_folder`, `list_indexed_folders`, `reindex_files`.
+- **Web & knowledge**: `research` (grounded, source-checked answers), `web_search` (SearXNG-first), `fetch_url` (readability), `wikipedia`, `define`, `translate`, `news_fetcher`, `get_weather`, `get_location`, `get_current_time`.
+- **Memory & personality**: `recall_memory`, `reflect_on_session`, `update_user_profile`, `update_personality`, `update_scratchpad`, `get_scratchpad`, `export_scratchpad`, `list_workspaces`, `verify_mutation`.
+- **Productivity**: `save_note`, `list_notes`, `add_todo`, `list_todos`, `complete_todo`, `draft_email` (saves a draft, never sends), `start_focus`, `focus_status`, `extend_focus`, `end_focus` (Deep Work timer).
+- **Vision & overlay**: `take_screenshot`, `analyze_screen` (gemma4 native box_2d vision), `focus_box`, `get_active_context`.
+- **Voice & interaction**: `enter_listen_mode`, `set_language` (Danish/English), `add_stt_correction`.
+- **System**: `system_status` (CPU/RAM/GPU/disk/battery).
+- **Autonomy & self-dev**: `create_tool`, `git_commit`, `start_mission`, `mission_status`, `start_background_task`, `task_status`, `cancel_task`.
+- **Misc**: `roll_dice`.
+
+> Removed in cleanup (LLM does them better inline): `word_counter`, `temperature_converter`, `date_difference_calculator`, `summarize_and_extract`.
 
 ---
 

@@ -1,5 +1,12 @@
 # Grace — Autonomous Backlog
 
+> **Done 2026-07-19 session:** A (unit + smoke tests, `npm run test`/`npm run smoke`),
+> search_content, system_status, recent_files, notes, todo, wikipedia, translate, define,
+> draft_email; remove dead chat()/chatStream(); debounce journal writes; parallelize research
+> fetches; pluggable embedder (GRACE_EMBED_URL) + grace_embed_server.py; text-input mode
+> (GRACE_TEXT_INPUT=1); refresh 3-TOOLS.md. Remaining items below.
+
+
 Self-contained work items Claude can build + validate headlessly (build-green + unit/smoke tests).
 Risky/behavior-changing items are feature-flagged or scaffolded; anything needing live voice/audio
 validation is marked ⚠live. Model downloads (Røst STT, e5 embedder, Danish TTS — see 6-MODEL-UPGRADES.md)
