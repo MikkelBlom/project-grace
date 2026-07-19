@@ -11,6 +11,7 @@
     "dev": "npm run dev --workspace=packages/overlay",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "eval": "node scripts/eval.mjs",
     "clean": "find . -name 'dist' -not -path '*/node_modules/*' -exec rm -rf {} + 2>/dev/null; echo done"
   },
   "devDependencies": {
