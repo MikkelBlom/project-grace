@@ -1,0 +1,13 @@
+{
+  "_note": "Folders Grace indexes so she can find your files fast. '~' = your home folder. Whole drives are allowed (e.g. 'C:/') — system and build junk is auto-skipped. Edit here, or just tell Grace 'index my <folder>' / 'stop indexing <folder>' (add_indexed_folder / remove_indexed_folder). Omit excludeDirs to use the built-in skip list.",
+  "roots": [
+    "~/Documents",
+    "~/Desktop",
+    "~/Downloads",
+    "~/Documents/Projects",
+    "~/Projects",
+    "~/Wireframe Studios"
+  ],
+  "maxEntries": 300000,
+  "maxDepth": 12
+}
