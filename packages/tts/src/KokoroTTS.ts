@@ -33,6 +33,25 @@ const DA_VOICE   = process.env.GRACE_TTS_DA_VOICE ?? 'da_DK';
 // 'powershell' (default) = fetch WAV + play per-clip via PowerShell SoundPlayer.
 const PLAYBACK   = process.env.GRACE_TTS_PLAYBACK ?? 'powershell';
 const TEMP_DIR   = path.join(tmpdir(), 'grace-tts');
+// Sentence-streaming: synthesise the (short) first sentence and start audio before the whole reply
+// is synthesised — lower first-audio latency. Off by default (per-clip playback dropped over
+// Bluetooth); enable with GRACE_TTS_STREAM=1, and it's automatic with the persistent server stream.
+const STREAMING  = process.env.GRACE_TTS_STREAM === '1' || PLAYBACK === 'server';
+
+/** Split text into speak-sized chunks on sentence boundaries. Flushes each time the buffer reaches
+ *  ~24 chars, so the first sentence(s) play quickly (fast first audio) while only merging genuinely
+ *  tiny fragments to avoid a flurry of one-word clips. */
+function splitForTTS(text: string): string[] {
+  const pieces = text.match(/[^.!?…]+[.!?…]+|\S[^.!?…]*$/g) ?? [text];
+  const chunks: string[] = [];
+  let buf = '';
+  for (const p of pieces) {
+    buf = buf ? `${buf} ${p.trim()}` : p.trim();
+    if (buf.length >= 24) { chunks.push(buf); buf = ''; }
+  }
+  if (buf.trim()) chunks.push(buf.trim());
+  return chunks.length ? chunks : [text];
+}
 
 // ─────────────────────────────────────────────
 
@@ -119,7 +138,13 @@ export class KokoroTTS {
   private setupListeners(): void {
     bus.on('tts:speaking', ({ text, sessionId }) => {
       this.stopRequested = false;   // a fresh utterance clears any prior stop latch
-      this.queue.push({ text, sessionId });
+      // Stream in sentence chunks (first audio sooner) when enabled; otherwise one clip (the
+      // Bluetooth-safe default). The queue plays them in order and emits a single tts:done.
+      if (STREAMING && text.length > 60) {
+        for (const chunk of splitForTTS(text)) this.queue.push({ text: chunk, sessionId });
+      } else {
+        this.queue.push({ text, sessionId });
+      }
       if (!this.isSpeaking) this.processQueue();
     });
     bus.on('tts:stop', () => this.stop());
