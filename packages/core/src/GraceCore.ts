@@ -12,6 +12,7 @@
 import { bus } from './EventBus.js';
 import { graceMemory } from './memory.js';
 import { settings } from './settings.js';
+import { sttCorrections } from './sttCorrections.js';
 import type { GraceConfig, GraceMode, GracePowerState, ConversationTurn } from '@grace/shared';
 
 // Hold-the-floor / "listen mode" trigger phrases (case-insensitive, DA + EN).
@@ -102,7 +103,9 @@ export class GraceCore {
     }
 
     // ── STT → route based on power state ──────
-    bus.on('stt:heard', async ({ text, sessionId }) => {
+    bus.on('stt:heard', async ({ text: rawText, sessionId }) => {
+      // Deterministic post-ASR correction (Mikkel's curated name/term fixes) before anything else.
+      const text = sttCorrections.apply(rawText);
       if (this.powerState === 'paused' || this.powerState === 'sleeping') {
         return; // Grace is fully off — ignore
       }
