@@ -25,6 +25,10 @@ const CHROMA_COMPOSE_PATH = path.join(ROOT, 'docker', 'chroma', 'docker-compose.
 
 const OLLAMA_URL = process.env.GRACE_OLLAMA_URL ?? 'http://localhost:11434';
 const EMBED_MODEL = process.env.GRACE_EMBED_MODEL ?? 'nomic-embed-text';
+// Optional dedicated embedding server (off the RTX — e.g. e5 on CPU/ONNX). When set, Grace POSTs
+// {input} to `${GRACE_EMBED_URL}/embed` and reads {embedding} (or OpenAI-style {data:[{embedding}]}),
+// instead of Ollama. See docs/6-MODEL-UPGRADES.md. Empty = use Ollama's nomic-embed on the GPU.
+const EMBED_URL = process.env.GRACE_EMBED_URL ?? '';
 const CHROMA_URL = process.env.GRACE_CHROMA_URL ?? 'http://127.0.0.1:8000';
 
 const COLLECTION_MAP: Record<string, string> = {
@@ -505,14 +509,24 @@ class ChromaBridge {
     while (true) {
       try {
         const t0 = Date.now();
-        const result = await this.fetchJson(`${OLLAMA_URL}/api/embeddings`, {
-          method: 'POST',
-          body: JSON.stringify({ model: EMBED_MODEL, prompt: text, keep_alive: -1 }),
-          signal: AbortSignal.timeout(20_000),
-        });
-        const embedding = result?.embedding;
-        if (Array.isArray(embedding)) { logTiming('embed', Date.now() - t0, { model: EMBED_MODEL }); return embedding.map((v: any) => Number(v) || 0); }
-        throw new Error('Invalid embedding format from Ollama');
+        let embedding: any;
+        if (EMBED_URL) {
+          const r = await this.fetchJson(`${EMBED_URL.replace(/\/+$/, '')}/embed`, {
+            method: 'POST',
+            body: JSON.stringify({ input: text }),
+            signal: AbortSignal.timeout(20_000),
+          });
+          embedding = r?.embedding ?? r?.data?.[0]?.embedding;
+        } else {
+          const result = await this.fetchJson(`${OLLAMA_URL}/api/embeddings`, {
+            method: 'POST',
+            body: JSON.stringify({ model: EMBED_MODEL, prompt: text, keep_alive: -1 }),
+            signal: AbortSignal.timeout(20_000),
+          });
+          embedding = result?.embedding;
+        }
+        if (Array.isArray(embedding)) { logTiming('embed', Date.now() - t0, { model: EMBED_URL ? 'embed-server' : EMBED_MODEL }); return embedding.map((v: any) => Number(v) || 0); }
+        throw new Error('Invalid embedding format from embedder');
       } catch (error) {
         retries++;
         if (retries > 3) throw new Error(`[Memory] Ollama embeddings failed permanently: ${String(error)}`);
