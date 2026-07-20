@@ -24,7 +24,7 @@ Add-Type -AssemblyName WindowsBase
 $pos = [System.Windows.Forms.Cursor]::Position
 $name = ''; $ct = ''; $val = ''; $win = ''
 try {
-  $pt = New-Object System.Windows.Point ([double]$pos.X), ([double]$pos.Y)
+  $pt = New-Object System.Windows.Point -ArgumentList ([double]$pos.X), ([double]$pos.Y)
   $el = [System.Windows.Automation.AutomationElement]::FromPoint($pt)
   if ($el -ne $null) {
     try { $name = $el.Current.Name } catch { }

@@ -14,6 +14,7 @@ export { eyePause } from './eyePause.js';
 export { validateConfigs } from './configCheck.js';
 export { vault } from './vault.js';
 export { undoManager } from './undo.js';
+export { scheduler } from './scheduler.js';
 export type {
 	Turn,
 	SemanticRecord,

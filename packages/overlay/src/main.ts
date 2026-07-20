@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-import { GraceCore, PowerManager, bus, fsIndex, validateConfigs } from '@grace/core';
+import { GraceCore, PowerManager, bus, fsIndex, validateConfigs, scheduler } from '@grace/core';
 import { defaultConfig } from '@grace/shared';
 import { setupBridge } from './bridge.js';
 import { GraceTray } from './tray.js';
@@ -235,6 +235,9 @@ async function startServices(): Promise<void> {
     });
     console.log('[Grace] ⌨ Text input mode ON — type to Grace and press Enter.');
   }
+
+  // ── Scheduler — fires timed reminders + recurring wellness nudges ──
+  scheduler.start();
 
   console.log('[Grace] All services online.');
   console.log(`  LLM:     ${LLM_PROVIDER}`);
