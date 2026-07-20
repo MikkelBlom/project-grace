@@ -222,6 +222,16 @@ function currentSystemPrompt(): string {
   return [STATIC_PROMPT, langDirective, describeTools()].filter(Boolean).join('\n\n');
 }
 
+// Opt-in fast-model routing (62): trivial chit-chat can use a smaller/faster model (GRACE_FAST_MODEL).
+// Default unset → always the main model, zero behaviour change. Conservative so tool-needing turns
+// never route to the small model.
+const FAST_MODEL = process.env.GRACE_FAST_MODEL ?? '';
+function isTrivialChat(text: string): boolean {
+  const t = String(text ?? '').trim().toLowerCase();
+  if (t.length > 40) return false;
+  return /^(hej|hi|hello|hey|yo|godmorgen|good ?morning|god ?aften|good ?evening|tak|thanks|thank you|ok|okay|okey|yes|no|ja|nej|jaja|haha|hehe|cool|nice|godt|fint|super|hvordan går det|how are you|what'?s up|godnat|good ?night)\b/.test(t);
+}
+
 function inferPromptQuery(messages: Array<{ role: string; content: string }>): string {
   // Key memory retrieval off Mikkel's ACTUAL question — skip the injected CONTEXT block AND the
   // "TOOL RESULT (...)" turns pushed on loop steps ≥2, which otherwise became the RAG query mid-loop.
@@ -473,9 +483,11 @@ export class OllamaLLM {
 
         let step = 0;
         const llmStepMs: number[] = [];
+        // Fast-model routing (opt-in): trivial chit-chat can use a smaller model.
+        const turnModel = FAST_MODEL && isTrivialChat(text) ? FAST_MODEL : this.model;
         for (; step < MAX_STEPS; step++) {
           const stepT0 = Date.now();
-          const reply = await this.complete(work);
+          const reply = await this.complete(work, currentSystemPrompt(), turnModel);
           llmStepMs.push(Date.now() - stepT0);
           if (this.turnCancelled) { console.log('[OllamaLLM] ⏹ turn cancelled (barge-in)'); return; }
           console.log(`[OllamaLLM] 🧠 Raw reply:\n${reply}`);
@@ -638,7 +650,7 @@ export class OllamaLLM {
   }
 
   // ── Multi-step completion (non-streaming, system prompt + think:false) ──
-  private async complete(messages: Array<{ role: string; content: string }>, systemPrompt: string = currentSystemPrompt()): Promise<string> {
+  private async complete(messages: Array<{ role: string; content: string }>, systemPrompt: string = currentSystemPrompt(), model: string = this.model): Promise<string> {
     const norm = messages.map(m => ({
       role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
       content: m.content,
@@ -666,7 +678,7 @@ export class OllamaLLM {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: this.model,
+          model,
           messages: messagesToSend,
           stream: false,
           think: false,

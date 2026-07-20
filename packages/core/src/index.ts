@@ -15,6 +15,7 @@ export { validateConfigs } from './configCheck.js';
 export { vault } from './vault.js';
 export { undoManager } from './undo.js';
 export { scheduler } from './scheduler.js';
+export { notificationCenter } from './notifications.js';
 export type {
 	Turn,
 	SemanticRecord,

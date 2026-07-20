@@ -83,6 +83,7 @@ import './tools/gmail.js';
 import './tools/mcp.js';
 import './tools/screen_narration.js';
 import './tools/knowledge_graph.js';
+import './tools/notifications.js';
 import './tools/read_file.js';
 import './tools/create_tool.js';
 import './tools/create_folder.js';

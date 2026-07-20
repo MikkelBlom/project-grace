@@ -1,0 +1,40 @@
+// Notification center — accumulates Grace's proactive alerts (every `overlay:notification` event)
+// into a rolling, persisted log Mikkel can review. A renderer can later surface these visually; the
+// data layer is here and non-breaking.
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { bus } from './EventBus.js';
+
+const ROOT = process.env.GRACE_REPO_ROOT
+  ? path.resolve(process.env.GRACE_REPO_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const N_PATH = path.join(ROOT, 'data', 'notifications.json');
+
+interface Note { text: string; level: string; ts: number; }
+
+class NotificationCenter {
+  private list: Note[] = [];
+
+  constructor() {
+    this.load();
+    bus.on('overlay:notification', (n: any) => this.add(n?.text ?? '', n?.level ?? 'info'));
+  }
+
+  private load(): void { try { const d = JSON.parse(fs.readFileSync(N_PATH, 'utf8')); this.list = Array.isArray(d.notes) ? d.notes : []; } catch { this.list = []; } }
+  private save(): void { try { fs.mkdirSync(path.dirname(N_PATH), { recursive: true }); fs.writeFileSync(N_PATH, JSON.stringify({ notes: this.list.slice(-100) }, null, 2)); } catch { /* best-effort */ } }
+
+  private add(text: string, level: string): void {
+    if (!text) return;
+    this.list.push({ text: String(text), level: String(level), ts: Date.now() });
+    if (this.list.length > 100) this.list = this.list.slice(-100);
+    this.save();
+  }
+
+  recent(n = 20): Array<{ text: string; level: string; when: string }> {
+    return this.list.slice(-n).reverse().map((x) => ({ text: x.text, level: x.level, when: new Date(x.ts).toISOString().slice(0, 16).replace('T', ' ') }));
+  }
+  clear(): void { this.list = []; this.save(); }
+}
+
+export const notificationCenter = new NotificationCenter();
