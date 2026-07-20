@@ -1,0 +1,15 @@
+# Normalize line endings so git stops warning about LF↔CRLF on every commit.
+# Text files are stored with LF in the repo; binaries are left untouched.
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.wav  binary
+*.mp3  binary
+*.onnx binary
+*.bin  binary
+*.enc  binary
+*.pdf  binary
