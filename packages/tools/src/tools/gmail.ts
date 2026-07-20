@@ -11,6 +11,7 @@
 
 import { registerTool } from '../registry.js';
 import { googleFetch, googleErrorResult } from '../lib/google.js';
+import { stripHeaderCtl, isSingleRecipient } from '../lib/emailHeader.js';
 
 const BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const MAX_BODY_CHARS = 4000;
@@ -198,15 +199,11 @@ registerTool({
   async run(args) {
     // Header-injection guard: strip CR/LF/other control chars so a crafted `to`/`subject` (e.g. from
     // an injected email Grace is replying to) can't smuggle extra headers like a hidden Bcc: into the draft.
-    // eslint-disable-next-line no-control-regex
-    const stripCtl = (s: string) => s.replace(/[\x00-\x1F\x7F]/g, '').trim();
-    const to = stripCtl(String(args.to ?? ''));
-    const subject = stripCtl(String(args.subject ?? ''));
+    const to = stripHeaderCtl(String(args.to ?? ''));
+    const subject = stripHeaderCtl(String(args.subject ?? ''));
     const body = String(args.body ?? '');
     if (!to || !subject || !body.trim()) return { error: 'to, subject and body are all required' };
-    // A recipient must be a single address (optionally "Name <addr>") — rejects injected extra recipients.
-    const addrOk = /^[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+$/.test(to) || /^[^<>]+<[^<>@\s]+@[^<>@\s]+\.[^<>@\s]+>$/.test(to);
-    if (!addrOk) return { error: `Refused: "${to.slice(0, 60)}" is not a single valid recipient address.` };
+    if (!isSingleRecipient(to)) return { error: `Refused: "${to.slice(0, 60)}" is not a single valid recipient address.` };
 
     const raw = [
       `To: ${to}`,

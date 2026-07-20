@@ -8,6 +8,9 @@ const { parseLanguage, languageName } = await import('../packages/core/dist/sett
 const { sttCorrections } = await import('../packages/core/dist/sttCorrections.js');
 const { routerHint } = await import('../packages/llm/dist/router.js');
 const { splitForTTS } = await import('../packages/tts/dist/ttsChunk.js');
+const { isHardDenied, classifyReadOnly } = await import('../packages/tools/dist/lib/commandSafety.js');
+const { stripHeaderCtl, isSingleRecipient } = await import('../packages/tools/dist/lib/emailHeader.js');
+const { nextRecurrence } = await import('../packages/core/dist/scheduler.js');
 
 test('decodeEntities: danish + numeric + named', () => {
   assert.equal(decodeEntities('caf&eacute; &aelig;&oslash;&aring;'), 'café æøå');
@@ -57,4 +60,56 @@ test('splitForTTS: chunks multi-sentence, keeps single short', () => {
   assert.ok(chunks.length >= 2);
   assert.equal(splitForTTS('Kort.').length, 1);
   assert.ok(chunks.join(' ').includes('Hej Mikkel'));
+});
+
+// ── run_command safety (the security boundary) ──
+test('commandSafety: chaining/redirection/substitution never auto-run', () => {
+  // The critical bypass: a read-only prefix must NOT whitelist a chained destructive command.
+  assert.equal(classifyReadOnly('echo x & del foo.txt', false), false);
+  assert.equal(classifyReadOnly('git status && node -e "require(1)"', true), false);
+  assert.equal(classifyReadOnly('echo x > C:\\Users\\mikke\\.bashrc', false), false); // redirection
+  assert.equal(classifyReadOnly('echo `rm -rf ~`', false), false);                    // backtick subst
+  assert.equal(classifyReadOnly('echo $(whoami)', false), false);                     // $() subst
+});
+
+test('commandSafety: genuine read-only chains still auto-run', () => {
+  assert.equal(classifyReadOnly('git status', true), true);
+  assert.equal(classifyReadOnly('git log | findstr fix', true), true);   // both segments read-only
+  assert.equal(classifyReadOnly('ls', false), true);
+  assert.equal(classifyReadOnly('npm run build', false), false);         // build is not read-only
+});
+
+test('commandSafety: npm test / tsc only auto-run inside the repo', () => {
+  assert.equal(classifyReadOnly('npm test', false), false);  // arbitrary repo → confirm
+  assert.equal(classifyReadOnly('npm test', true), true);    // Grace repo → ok
+  assert.equal(classifyReadOnly('tsc -b', true), true);
+  assert.equal(classifyReadOnly('tsc -b', false), false);
+});
+
+test('commandSafety: hard-deny catches destructive forms + aliases', () => {
+  for (const c of [
+    'rm -rf /', 'rm --recursive --force ~/x', 'rm -rf C:\\Users\\mikke\\Documents',
+    'rd /s /q C:\\x', 'erase /q /f a.txt', 'del /q foo', 'Remove-Item -Force -Recurse C:\\x',
+    'format C:', 'diskpart', 'shutdown /s', 'reg delete HKLM\\x', 'dd if=/dev/zero of=/dev/sda',
+  ]) assert.equal(isHardDenied(c), true, `should hard-deny: ${c}`);
+  for (const c of ['git status', 'ls -la', 'npm run build', 'echo hello']) {
+    assert.equal(isHardDenied(c), false, `should NOT hard-deny: ${c}`);
+  }
+});
+
+// ── Gmail header-injection guard ──
+test('emailHeader: strips control chars and rejects injected recipients', () => {
+  assert.equal(stripHeaderCtl('a@b.com\r\nBcc: evil@x.com'), 'a@b.comBcc: evil@x.com'); // newline gone
+  assert.equal(isSingleRecipient('boss@corp.com'), true);
+  assert.equal(isSingleRecipient('Mikkel <mikkel@example.com>'), true);
+  assert.equal(isSingleRecipient('a@b.com, c@d.com'), false);                 // multiple recipients
+  assert.equal(isSingleRecipient(stripHeaderCtl('a@b.com\r\nBcc: evil@x.com')), false); // injection blocked
+  assert.equal(isSingleRecipient('not-an-email'), false);
+});
+
+// ── Scheduler recurrence (no drift, catch up after sleep) ──
+test('nextRecurrence: advances from dueAt, steps strictly past now', () => {
+  assert.equal(nextRecurrence(1000, 100, 1050), 1100);  // no drift (not 1150 = now+recur)
+  assert.equal(nextRecurrence(1000, 100, 1100), 1200);  // boundary → strictly future
+  assert.equal(nextRecurrence(1000, 100, 1350), 1400);  // catch up past a slept-through backlog
 });

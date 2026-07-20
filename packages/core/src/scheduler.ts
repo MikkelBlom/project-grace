@@ -17,6 +17,17 @@ const REM_PATH = path.join(ROOT, 'data', 'reminders.json');
 
 export interface Reminder { id: string; text: string; dueAt: number; recurEveryMs?: number; tag?: string; }
 
+/**
+ * Next occurrence for a recurring reminder, advanced from the ORIGINAL dueAt (not the tick time) so
+ * occurrences don't drift forward by up to one tick each, and stepped past `now` so a wake-from-sleep
+ * that skipped several periods lands on the next future slot rather than replaying the backlog.
+ */
+export function nextRecurrence(dueAt: number, recurEveryMs: number, now: number): number {
+  let next = dueAt + recurEveryMs;
+  while (next <= now) next += recurEveryMs;
+  return next;
+}
+
 class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -50,11 +61,7 @@ class Scheduler {
       if (r.dueAt <= now) {
         due.push(r);
         if (r.recurEveryMs && r.recurEveryMs > 0) {
-          // Reschedule from dueAt (not `now`) so recurring reminders don't drift forward by up to
-          // one tick each occurrence; step past now in case the machine was asleep for several periods.
-          let next = r.dueAt + r.recurEveryMs;
-          while (next <= now) next += r.recurEveryMs;
-          kept.push({ ...r, dueAt: next });
+          kept.push({ ...r, dueAt: nextRecurrence(r.dueAt, r.recurEveryMs, now) });
         }
         // else: one-shot, drop
       } else kept.push(r);
