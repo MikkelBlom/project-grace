@@ -18,7 +18,7 @@ registerTool({
     const raw = String(args.path ?? '');
     // Resolve relative paths under HOME (not the app's cwd): "Downloads/x.txt" => ~/Downloads/x.txt.
     const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
-    if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be written.` };
+    if (!(p === home || p.startsWith(home + path.sep))) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be written.` };
     if (isGraceOwnSource(p)) return { error: `Refused: ${p} is part of Grace's own source code — change your own tools/code via create_tool (sandbox-validated), not raw write_file.` };
     const content = String(args.content ?? '');
     undoManager.beforeWrite(p, `write ${path.basename(p)}`);

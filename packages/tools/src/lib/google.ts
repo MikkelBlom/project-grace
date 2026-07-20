@@ -38,16 +38,10 @@ export function googleErrorResult(e: unknown): { error: string; setup?: string }
 
 let cachedToken: string | null = null;
 let cachedExpiry = 0; // epoch ms; we refresh a minute early
+let refreshInFlight: Promise<string> | null = null;
 
-/**
- * Return a fresh Google access token, exchanging the vault's refresh_token when the
- * cached one is missing or about to expire. Throws GoogleAuthError (with setup hint)
- * when creds or the refresh_token are missing, or the refresh itself fails.
- */
-export async function googleToken(): Promise<string> {
-  const now = Date.now();
-  if (cachedToken && now < cachedExpiry - 60_000) return cachedToken;
-
+/** Exchange the vault refresh_token for a fresh access token and cache it. */
+async function doRefresh(): Promise<string> {
   const clientId = vault.get('google_client_id');
   const clientSecret = vault.get('google_client_secret');
   const refreshToken = vault.get('google_refresh_token');
@@ -90,19 +84,38 @@ export async function googleToken(): Promise<string> {
   }
 
   cachedToken = data.access_token;
-  cachedExpiry = now + (data.expires_in ?? 3600) * 1000;
+  cachedExpiry = Date.now() + (data.expires_in ?? 3600) * 1000;
   return cachedToken;
 }
 
 /**
- * fetch() against a Google REST API with the Bearer token attached and a default
- * timeout. Callers own status handling; this only guarantees a valid access token.
+ * Return a fresh Google access token, exchanging the vault's refresh_token when the cached one is
+ * missing or about to expire (or when `force` is set, e.g. after a 401). Concurrent callers share a
+ * single in-flight refresh so a batched Calendar+Gmail turn fires ONE refresh, not two.
+ */
+export async function googleToken(force = false): Promise<string> {
+  if (!force && cachedToken && Date.now() < cachedExpiry - 60_000) return cachedToken;
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
+/**
+ * fetch() against a Google REST API with the Bearer token attached and a default timeout. On a 401
+ * (token invalidated server-side before its local expiry), the cache is force-refreshed and the
+ * request retried ONCE, so a stale cached token doesn't wedge every call for up to an hour.
  */
 export async function googleFetch(url: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
-  const token = await googleToken();
-  return fetch(url, {
+  const attempt = (token: string) => fetch(url, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
     signal: init.signal ?? AbortSignal.timeout(timeoutMs),
   });
+  let res = await attempt(await googleToken());
+  if (res.status === 401) {
+    cachedToken = null; cachedExpiry = 0;
+    res = await attempt(await googleToken(true));
+  }
+  return res;
 }

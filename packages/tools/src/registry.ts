@@ -31,7 +31,9 @@ const REPO_ROOT = process.env.GRACE_REPO_ROOT
 export function isGraceOwnSource(p: string): boolean {
   const rel = path.relative(REPO_ROOT, path.resolve(p));
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
-  return ['packages', 'sandbox', 'scripts', 'shared'].includes(rel.split(path.sep)[0]);
+  // Also block Grace's state + config dirs: the file tools must not author data/undo-stack.json,
+  // data/vault.enc, config/*, etc. (an undo-stack-poisoning → arbitrary-write vector otherwise).
+  return ['packages', 'sandbox', 'scripts', 'shared', 'data', 'config'].includes(rel.split(path.sep)[0]);
 }
 
 export function registerTool(t: ToolSpec): void { tools.set(t.name, t); }

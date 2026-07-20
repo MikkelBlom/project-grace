@@ -24,6 +24,10 @@ Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
 $text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${textB64}'))
 $enter = ${enter ? '$true' : '$false'}
+# When NOT pressing Enter, collapse embedded newlines to spaces so multi-line text can't run
+# intermediate lines (an embedded \\n would otherwise become {ENTER} and execute). This makes the
+# 'willPressEnter:false' contract truthful — nothing runs until the user presses Enter themselves.
+if (-not $enter) { $text = $text -replace '\\r?\\n', ' ' }
 
 $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
 if ($fe -eq $null) { ConvertTo-Json @{ ok=$false; error='no-focused-element' } -Compress; exit }

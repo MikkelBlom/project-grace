@@ -22,23 +22,27 @@ registerTool({
     try {
       if (String(args.city ?? '').trim()) {
         const g = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(String(args.city).trim())}&count=1`, { signal: AbortSignal.timeout(8000) });
+        if (!g.ok) return { error: `geocoding service returned HTTP ${g.status}` };
         const gd = (await g.json()) as any;
         const r = gd?.results?.[0];
         if (!r) return { error: `city not found: ${args.city}` };
         lat = r.latitude; lon = r.longitude; place = `${r.name}, ${r.country_code}`;
       } else {
         const l = await fetch('http://ip-api.com/json/', { signal: AbortSignal.timeout(8000) });
+        if (!l.ok) return { error: `location service returned HTTP ${l.status}` };
         const ld = (await l.json()) as any;
+        if (typeof ld?.lat !== 'number' || typeof ld?.lon !== 'number') return { error: 'could not determine your location' };
         lat = ld.lat; lon = ld.lon; place = `${ld.city}, ${ld.countryCode}`;
       }
       const f = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=${days}&timezone=auto`, { signal: AbortSignal.timeout(8000) });
+      if (!f.ok) return { error: `forecast service returned HTTP ${f.status}` };
       const fd = (await f.json()) as any;
       const d = fd?.daily;
-      if (!d?.time) return { error: 'forecast unavailable' };
+      if (!d?.time || !Array.isArray(d.temperature_2m_max) || !Array.isArray(d.weather_code)) return { error: 'forecast unavailable' };
       const forecast = d.time.map((date: string, i: number) => ({
         date,
         highC: d.temperature_2m_max[i],
-        lowC: d.temperature_2m_min[i],
+        lowC: d.temperature_2m_min?.[i],
         conditions: WMO[d.weather_code[i]] ?? `code ${d.weather_code[i]}`,
       }));
       return { place, days: forecast.length, forecast };

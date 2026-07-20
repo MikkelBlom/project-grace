@@ -26,7 +26,10 @@ registerTool({
     let re: RegExp;
     const m = q.match(/^\/(.*)\/([a-z]*)$/);
     try {
-      re = m ? new RegExp(m[1]!, m[2]) : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      // Strip global/sticky flags: re.test() over a reused regex is stateful with g/y (advances
+      // lastIndex), which silently skips matches on later lines. We always want a fresh per-line test.
+      const flags = m ? (m[2] || '').replace(/[gy]/g, '') : 'i';
+      re = m ? new RegExp(m[1]!, flags) : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     } catch { return { error: 'invalid regex' }; }
 
     const matches: Array<{ file: string; line: number; text: string }> = [];

@@ -24,7 +24,7 @@ registerTool({
     const home = path.resolve(os.homedir());
     const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
     
-    if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be edited.` };
+    if (!(p === home || p.startsWith(home + path.sep))) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be edited.` };
     if (isGraceOwnSource(p)) return { error: `Refused: ${p} is part of Grace's own source code — change your own tools/code via create_tool (sandbox-validated), not raw edit_file.` };
     
     let text: string;

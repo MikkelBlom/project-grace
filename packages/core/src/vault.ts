@@ -18,42 +18,63 @@ const ROOT = process.env.GRACE_REPO_ROOT
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const VAULT_PATH = path.join(ROOT, 'data', 'vault.enc');
 
-function masterKey(): Buffer {
+// File layout: [ salt(16) | iv(12) | tag(16) | ciphertext ]. The salt is random PER VAULT (stored
+// in the file), so two installs with the same default key don't share a derivation — a global
+// constant salt made the default-key vault offline-brute-forceable.
+const SALT_LEN = 16, IV_LEN = 12, TAG_LEN = 16;
+
+const keyCache = new Map<string, Buffer>();
+function masterKey(salt: Buffer): Buffer {
   const secret = process.env.GRACE_VAULT_KEY || `${os.hostname()}::${os.userInfo().username}::grace-vault-default`;
-  return crypto.scryptSync(secret, 'grace-vault-salt-v1', 32);
+  const id = salt.toString('hex') + (process.env.GRACE_VAULT_KEY ? ':k' : ':d');
+  let k = keyCache.get(id);
+  if (!k) { k = crypto.scryptSync(secret, salt, 32); keyCache.set(id, k); }
+  return k;
 }
 
 type VaultData = Record<string, string>;
 
 class Vault {
+  /** Load & decrypt. Returns {} if the vault file doesn't exist yet, but THROWS if the file is
+   *  present and can't be decrypted/parsed (wrong GRACE_VAULT_KEY or corruption). This is what stops
+   *  set()/delete() from silently overwriting good ciphertext with a fresh single-key vault. */
   private load(): VaultData {
+    let raw: Buffer;
+    try { raw = fs.readFileSync(VAULT_PATH); }
+    catch (e: any) { if (e?.code === 'ENOENT') return {}; throw e; }
     try {
-      const raw = fs.readFileSync(VAULT_PATH);
-      const iv = raw.subarray(0, 12);
-      const tag = raw.subarray(12, 28);
-      const enc = raw.subarray(28);
-      const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey(), iv);
+      const salt = raw.subarray(0, SALT_LEN);
+      const iv = raw.subarray(SALT_LEN, SALT_LEN + IV_LEN);
+      const tag = raw.subarray(SALT_LEN + IV_LEN, SALT_LEN + IV_LEN + TAG_LEN);
+      const enc = raw.subarray(SALT_LEN + IV_LEN + TAG_LEN);
+      const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey(salt), iv);
       decipher.setAuthTag(tag);
       const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
       return JSON.parse(dec.toString('utf8'));
-    } catch { return {}; }
+    } catch {
+      throw new Error('Vault present but could not be decrypted (wrong GRACE_VAULT_KEY or corrupted file). Refusing to overwrite it — restore the key, or move data/vault.enc aside to start fresh.');
+    }
   }
 
   private save(data: VaultData): void {
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', masterKey(), iv);
+    const salt = crypto.randomBytes(SALT_LEN);
+    const iv = crypto.randomBytes(IV_LEN);
+    const cipher = crypto.createCipheriv('aes-256-gcm', masterKey(salt), iv);
     const enc = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
     fs.mkdirSync(path.dirname(VAULT_PATH), { recursive: true });
-    fs.writeFileSync(VAULT_PATH, Buffer.concat([iv, tag, enc]));
+    fs.writeFileSync(VAULT_PATH, Buffer.concat([salt, iv, tag, enc]));
   }
 
-  /** Read a secret. Also checks env `GRACE_<KEY>` (uppercased) as a fallback so keys can come from
-   *  the environment without being stored on disk. */
+  /** Read a secret. A stored value wins; `GRACE_<KEY>` env is only a FALLBACK when nothing is
+   *  stored, so a stale/unrelated env var can't silently shadow a real stored secret. Decryption
+   *  failure yields undefined here (reads must not crash an integration). */
   get(key: string): string | undefined {
+    let stored: string | undefined;
+    try { stored = this.load()[key]; } catch { stored = undefined; }
+    if (stored != null) return stored;
     const env = process.env[`GRACE_${key.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`];
-    if (env) return env;
-    return this.load()[key];
+    return env ? env : undefined;
   }
 
   set(key: string, value: string): void { const d = this.load(); d[key] = value; this.save(d); }

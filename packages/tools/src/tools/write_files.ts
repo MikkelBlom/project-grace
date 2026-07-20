@@ -35,7 +35,7 @@ registerTool({
       if (!raw) { failed.push({ path: '(empty)', error: 'path is required' }); continue; }
 
       const p = pathMod.isAbsolute(raw) ? pathMod.resolve(raw) : pathMod.resolve(home, raw);
-      if (!p.startsWith(home)) {
+      if (!(p === home || p.startsWith(home + pathMod.sep))) {
         failed.push({ path: p, error: `Outside home folder (${home}).` });
         continue;
       }

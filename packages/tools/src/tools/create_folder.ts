@@ -16,7 +16,7 @@ registerTool({
     const raw = String(args.path ?? '');
     if (!raw) return { error: 'path is required' };
     const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
-    if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only folders under home can be created.` };
+    if (!(p === home || p.startsWith(home + path.sep))) return { error: `Refused: ${p} is outside your home folder (${home}). Only folders under home can be created.` };
     try {
       undoManager.beforeMkdir(p, `create folder ${path.basename(p)}`);
       await fs.mkdir(p, { recursive: true });

@@ -32,9 +32,20 @@ registerTool({
         const out = execFileSync(PY, pyArgs(code), { timeout: 30_000, maxBuffer: 20 * 1024 * 1024 }).toString();
         return { path: p, type: 'docx', chars: out.length, text: out.slice(0, cap) };
       }
-      const raw = fs.readFileSync(p, 'utf8');
+      // Read only a bounded prefix — never load an 800 MB log/csv into a string (which also blocked
+      // the event loop and threw on >2 GiB files). 4 MB is ample for `cap` chars even after HTML stripping.
+      const READ_CAP = 4 * 1024 * 1024;
+      const size = fs.statSync(p).size;
+      let raw: string;
+      if (size <= READ_CAP) {
+        raw = fs.readFileSync(p, 'utf8');
+      } else {
+        const fd = fs.openSync(p, 'r');
+        try { const buf = Buffer.alloc(READ_CAP); const n = fs.readSync(fd, buf, 0, READ_CAP, 0); raw = buf.subarray(0, n).toString('utf8'); }
+        finally { fs.closeSync(fd); }
+      }
       const text = (ext === '.html' || ext === '.htm') ? htmlToText(raw, cap) : raw.slice(0, cap);
-      return { path: p, type: ext.slice(1) || 'text', chars: raw.length, text };
+      return { path: p, type: ext.slice(1) || 'text', chars: raw.length, text, ...(size > READ_CAP ? { truncated: `read first 4 MB of ${(size / 1e6).toFixed(0)} MB` } : {}) };
     } catch (e) {
       if (ext === '.pdf') return { path: p, error: `PDF read failed — install pypdf (py ${PY_VER} -m pip install pypdf). ${String(e).slice(0, 120)}` };
       if (ext === '.docx') return { path: p, error: `DOCX read failed — install python-docx (py ${PY_VER} -m pip install python-docx). ${String(e).slice(0, 120)}` };

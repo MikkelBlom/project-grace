@@ -102,6 +102,10 @@ registerTool({
     const domain = String(args.domain ?? '').trim();
     const service = String(args.service ?? '').trim();
     if (!domain || !service) return { error: 'domain and service are required (e.g. light / turn_on).' };
+    // HA domains/services are [a-z0-9_]; reject anything else so a `/`, `..`, `?` can't reshape the URL path.
+    if (!/^[a-z0-9_]+$/i.test(domain) || !/^[a-z0-9_]+$/i.test(service)) {
+      return { error: 'domain and service may only contain letters, digits and underscores.' };
+    }
 
     const body: Record<string, unknown> = {};
     if (typeof args.entity_id === 'string' && args.entity_id.trim()) body.entity_id = args.entity_id.trim();

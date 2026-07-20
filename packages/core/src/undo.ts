@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -17,6 +18,20 @@ const ROOT = process.env.GRACE_REPO_ROOT
 const STACK_PATH = path.join(ROOT, 'data', 'undo-stack.json');
 const BACKUP_DIR = path.join(ROOT, 'data', 'undo-backups');
 const MAX_ENTRIES = 60;
+const HOME = path.resolve(os.homedir());
+
+// The persisted stack is UNTRUSTED input (a poisoned data/undo-stack.json could otherwise steer
+// reverse() into arbitrary-path writes/deletes). Restores are confined to the home tree, and a
+// backup source must live inside our own backup dir — never an arbitrary file to copy from.
+function underHome(p?: string): boolean {
+  if (!p) return false;
+  const r = path.resolve(p);
+  return r === HOME || r.startsWith(HOME + path.sep);
+}
+function underBackups(p?: string): boolean {
+  if (!p) return false;
+  return path.resolve(p).startsWith(BACKUP_DIR + path.sep);
+}
 
 export type UndoType = 'write' | 'edit' | 'delete' | 'move' | 'mkdir' | 'note';
 
@@ -30,6 +45,7 @@ export interface UndoEntry {
   prevExisted?: boolean; // did `path` exist before (write/mkdir)
   from?: string;
   to?: string;           // move
+  toBackup?: string;     // backup of a file the move OVERWROTE at `to` (so undo can restore it)
   reversible: boolean;
   undone?: boolean;
 }
@@ -71,15 +87,22 @@ class UndoManager {
   }
 
   // ── record hooks the file tools call BEFORE mutating ──
+  // NOTE: reversible reflects whether a backup actually succeeded — if we couldn't back up an
+  // existing file, the entry is marked NOT reversible so undo never falsely reports success.
   beforeWrite(filePath: string, description: string): void {
     const existed = fs.existsSync(filePath);
-    this.push({ id: newId(), type: existed ? 'edit' : 'write', description, ts: Date.now(), path: path.resolve(filePath), backupPath: existed ? this.backup(filePath) : undefined, prevExisted: existed, reversible: true });
+    const backupPath = existed ? this.backup(filePath) : undefined;
+    this.push({ id: newId(), type: existed ? 'edit' : 'write', description, ts: Date.now(), path: path.resolve(filePath), backupPath, prevExisted: existed, reversible: existed ? !!backupPath : true });
   }
   beforeDelete(filePath: string, description: string): void {
-    this.push({ id: newId(), type: 'delete', description, ts: Date.now(), path: path.resolve(filePath), backupPath: this.backup(filePath), prevExisted: true, reversible: true });
+    const backupPath = this.backup(filePath);
+    this.push({ id: newId(), type: 'delete', description, ts: Date.now(), path: path.resolve(filePath), backupPath, prevExisted: true, reversible: !!backupPath });
   }
   beforeMove(from: string, to: string, description: string): void {
-    this.push({ id: newId(), type: 'move', description, ts: Date.now(), from: path.resolve(from), to: path.resolve(to), reversible: true });
+    // If `to` already holds a file, the rename will clobber it — back it up so undo can restore it.
+    const toResolved = path.resolve(to);
+    const toBackup = fs.existsSync(toResolved) ? this.backup(toResolved) : undefined;
+    this.push({ id: newId(), type: 'move', description, ts: Date.now(), from: path.resolve(from), to: toResolved, toBackup, reversible: true });
   }
   beforeMkdir(dirPath: string, description: string): void {
     const existed = fs.existsSync(dirPath);
@@ -113,22 +136,30 @@ class UndoManager {
   private reverse(e: UndoEntry): void {
     switch (e.type) {
       case 'write': // file was newly created → delete it
+        if (!underHome(e.path)) throw new Error('refusing to undo: path escapes the home folder');
         if (e.path && !e.prevExisted && fs.existsSync(e.path)) fs.unlinkSync(e.path);
         break;
       case 'edit':  // restore prior content
       case 'delete': // restore the deleted file
-        if (e.path && e.backupPath && fs.existsSync(e.backupPath)) {
-          fs.mkdirSync(path.dirname(e.path), { recursive: true });
-          fs.copyFileSync(e.backupPath, e.path);
-        }
+        if (!underHome(e.path)) throw new Error('refusing to undo: path escapes the home folder');
+        if (!underBackups(e.backupPath) || !e.backupPath || !fs.existsSync(e.backupPath))
+          throw new Error('cannot undo: the backup is missing, so the original content is unrecoverable');
+        fs.mkdirSync(path.dirname(e.path!), { recursive: true });
+        fs.copyFileSync(e.backupPath, e.path!);
         break;
-      case 'move':  // move it back
+      case 'move':  // move it back, then restore anything the move had overwritten at `to`
+        if (!underHome(e.from) || !underHome(e.to)) throw new Error('refusing to undo: path escapes the home folder');
         if (e.from && e.to && fs.existsSync(e.to)) {
           fs.mkdirSync(path.dirname(e.from), { recursive: true });
           fs.renameSync(e.to, e.from);
         }
+        if (e.toBackup && underBackups(e.toBackup) && fs.existsSync(e.toBackup)) {
+          fs.mkdirSync(path.dirname(e.to!), { recursive: true });
+          fs.copyFileSync(e.toBackup, e.to!);
+        }
         break;
       case 'mkdir': // remove the created folder (only if we created it and it's empty)
+        if (!underHome(e.path)) throw new Error('refusing to undo: path escapes the home folder');
         if (e.path && !e.prevExisted && fs.existsSync(e.path)) fs.rmdirSync(e.path);
         break;
     }

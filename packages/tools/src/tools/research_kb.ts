@@ -67,7 +67,9 @@ registerTool({
     const entries = load();
     if (!entries.length) return { query, count: 0, matches: [], note: 'Knowledge base is empty — nothing saved yet.' };
 
-    const terms = query.toLowerCase().split(/\W+/).filter((t) => t.length > 1);
+    // Unicode-aware split so Danish letters (æ ø å é) aren't treated as word delimiters — \W is
+    // ASCII-only and would shred "læser" into ["l","ser"], wrecking recall in Grace's main language.
+    const terms = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 1);
     if (!terms.length) return { query, count: 0, matches: [], note: 'Query had no usable keywords.' };
 
     const scored = entries.map((e) => {

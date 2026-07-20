@@ -18,7 +18,8 @@ registerTool({
     const from = underHome(args.from);
     let to = underHome(args.to);
     if (!from || !to) return { error: 'both from and to are required' };
-    if (!from.startsWith(home) || !to.startsWith(home)) return { error: 'Both paths must be under the home folder.' };
+    const inHome = (r: string) => r === home || r.startsWith(home + path.sep);
+    if (!inHome(from) || !inHome(to)) return { error: 'Both paths must be under the home folder.' };
     if (isGraceOwnSource(from) || isGraceOwnSource(to)) return { error: "Refused: that path is part of Grace's own source code — manage your own tools via create_tool, not raw move_file." };
     try {
       try { const st = await fs.stat(to); if (st.isDirectory()) to = path.join(to, path.basename(from)); } catch { /* to does not exist yet */ }

@@ -7,6 +7,19 @@ import { registerTool } from '../registry.js';
 
 const SKIP = new Set(['node_modules', '.git', '$recycle.bin', 'windows', 'appdata']);
 
+/** Hash a file by STREAMING it — keeps memory flat and handles multi-GB files (readFile would
+ *  buffer the whole file and throw ERR_FS_FILE_TOO_LARGE above ~2 GiB, silently dropping the
+ *  biggest space-wasters — exactly the files this tool exists to find). */
+function hashFile(f: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('md5');
+    const s = fs.createReadStream(f);
+    s.on('error', reject);
+    s.on('data', (d) => h.update(d));
+    s.on('end', () => resolve(h.digest('hex')));
+  });
+}
+
 // Find duplicate files (same content) so Mikkel can reclaim space. Size-bucket first, then hash.
 registerTool({
   name: 'find_duplicates',
@@ -47,7 +60,7 @@ registerTool({
       const byHash = new Map<string, string[]>();
       for (const f of files) {
         try {
-          const h = crypto.createHash('md5').update(await fsp.readFile(f)).digest('hex');
+          const h = await hashFile(f);
           const a = byHash.get(h) ?? []; a.push(f); byHash.set(h, a);
         } catch { /* skip */ }
       }
