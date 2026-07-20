@@ -6,10 +6,10 @@ enrollment, or live visual validation of the HUD. Design + what's done below, so
 finishes them cleanly.
 
 ## Deep audio / NPU (needs models + live audio)
-- **1 Speaker verification** — plan: a `grace_speaker_server.py` computing a speaker embedding
-  (e.g. SpeechBrain ECAPA or Resemblyzer) at enrollment, then cosine-comparing each utterance; gate
-  responses to Mikkel's voice. NEEDS: model download + a one-time enrollment recording. Not built
-  (can't download now).
+- **1 Speaker verification** — **SERVER BUILT: `grace_speaker_server.py`** (sherpa-onnx WeSpeaker on
+  CPU; /enroll, /verify, /reset, /health; cosine gate, persisted voiceprint). NEEDS to go live: the
+  ~27 MB WeSpeaker ONNX download, a one-time enrollment recording, and wiring the STT path to POST each
+  utterance to /verify before dispatch. See docs/5 "Research decisions" and the server docstring.
 - **2 Denoise / AEC** — plan: an RNNoise/DeepFilterNet pass before Whisper, or the NPU denoise
   roster. NEEDS: model + live audio. Not built.
 - **6 Streaming STT** — plan: partial transcripts from the OpenVINO Whisper pipeline (chunked
@@ -25,15 +25,21 @@ finishes them cleanly.
 Done autonomously in this area: **8 language auto-switch** (text-based, `GRACE_AUTO_LANG`),
 **post-ASR correction**, **Ja/Nej confidence gate**, **dynamic hotword bias** — all shipped earlier.
 
-## UI / HUD (needs live visual validation)
-The HUD renderer is generated in TypeScript (`packages/overlay/src/vignetteWindow.ts`), with no
-static HTML — changing it safely needs to be *seen*. Rewriting it blind (while you're driving) risks
-the working overlay, so:
-- **70 Notification center** — DATA LAYER BUILT: `notificationCenter` (core) logs every alert to a
-  rolling store; `list_notifications` tool reads it. The visual panel is a later renderer add.
-- **65 Focus-timer countdown** — state is available (`focus_status`); needs a small renderer widget.
-- **64 HUD chat transcript** — needs a renderer scrollback fed by the `overlay:show`/speaking events.
-- **69 Theme support, 68 smarter multi-monitor, 21 confidence badges** — renderer/CSS work; live pass.
+## UI / HUD
+Rather than edit the working vignette blind, the passive widgets were built in a SEPARATE opt-in
+window (`GRACE_HUD=1`) per the 2026 overlay research — the vignette is byte-for-byte unchanged until
+enabled + tested live. Files: `packages/overlay/src/hudWindow.ts`, `hudPreload.cts`,
+`renderer/hud.html`. A mock-data preview harness renders it standalone (scratchpad/hud-preview.html).
+- **64 HUD chat transcript** — **BUILT** (live transcript panel, fed by stt:heard/tts:speaking).
+- **65 Focus-timer countdown** — **BUILT** (SVG ring, driven by the new `overlay:timer` bus event).
+- **70 Notification center** — toast layer **BUILT** (fed by overlay:notification); the interactive
+  *history panel* is the next step and should be its OWN window (research: interactive → dedicated
+  window). Data layer already exists (`notificationCenter` + `list_notifications`).
+- **69 Theme support** — **BUILT** (CSS vars + prefers-color-scheme + nativeTheme→hud:theme).
+- **68 smarter multi-monitor, 21 confidence badges** — HUD is on the primary display for now; a
+  per-display HUD + confidence badges are a live-pass follow-up.
+Go-live: set `GRACE_HUD=1`, confirm placement on the actual monitor(s), then (optional) move the
+notification history into a dedicated interactive window.
 
 ## Adaptive / signals (needs input hooks)
 - **51 Adaptive Deep Work, 52 energy/mood auto-inference** — need typing-speed / app-switch signals.

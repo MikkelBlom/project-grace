@@ -167,3 +167,17 @@ sandbox pass).
 - ✅ edit_file + read-back verify across ~8 edits to tools_list.txt — no data loss.
 - ✅ create_tool happy path: dice tool → sandbox → promoted → after restart roll_dice (6 & 20 sides) worked.
 - ✅ Self-correcting TS build errors (news_fetcher fixed across retries via the surfaced error).
+
+---
+
+## Deferred from the 2026-07-20 adversarial review (see docs/12-REVIEW-AND-HARDENING.md)
+- **Concurrent-turn shared OllamaLLM state** — a fire-and-forget mission runs while GraceCore is
+  "listening," so a barge-in turn shares instance fields (`currentAbort`, `lastToolContext`). Fix =
+  per-run AbortController / cancel token; do it with a live mic to test barge-in, not blind.
+- **Chroma /api/v1 vs v2** — heartbeat accepts a v2-only server but ops hit /api/v1, so recall can
+  silently degrade to local-only while telemetry says "chroma." Pin the version against a live Chroma.
+- **MCP spawns arbitrary executables / SSRF** — mcp_add_server+mcp_call let model-driven input run any
+  local exe / reach any host. shell:false stops arg injection; gate NEW exe/host behind confirmation or
+  an allowlist (product decision).
+- **Vault default key is machine-derived** (guessable) when GRACE_VAULT_KEY is unset — salt is now
+  random, but set GRACE_VAULT_KEY for real at-rest security.

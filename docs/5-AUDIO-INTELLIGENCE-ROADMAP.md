@@ -188,3 +188,31 @@ Raw ideas to triage into the Jira roadmap. Not commitments — a menu. Grouped b
 - **Persisted personality/mood** across sessions (Part 3).
 - **Connector tools** — calendar, email, Notion, etc. (MCP connectors already available).
 - **Self-evolution guardrails** — as Grace builds her own tools/bias lists, keep an audit + rollback.
+
+---
+
+## Research decisions (2026-07-20) — the local audio stack to adopt
+
+Decision-ready picks from a live-web research spike (cited fully in the session notes). All chosen to
+stay OFF the RTX (LLM) and OFF the Arc iGPU (Whisper), leaning on CPU / small ONNX.
+
+- **Speaker verification / diarization / streaming STT → one dependency: `sherpa-onnx`** (Apache-2.0,
+  pip, offline, Windows-native, CPU). WeSpeaker-ResNet34 (~27 MB, sub-1% EER) for the voice gate — it
+  only responds to Mikkel; its ONNX diarization for meetings (no HF-gated-model token dance); streaming
+  Zipformer-EN for instant partials (Danish partials stay on a whisper_streaming wrapper of the existing
+  OpenVINO Whisper, since streaming Zipformer is English-centric). Speaker-ID is language-independent.
+  **Built:** `grace_speaker_server.py` (enroll/verify/reset/health; cosine gate, threshold 0.5).
+- **Denoise → DeepFilterNet3** (~2M params, real-time on CPU; Intel ships an OpenVINO IR for Arc/NPU).
+  **AEC** (cancel Grace's own TTS from the mic) → Windows Communications-mode AEC or half-duplex /
+  push-to-talk while she speaks, rather than a hand-rolled AEC.
+- **Emotion/prosody (optional) → SenseVoice-Small ONNX** (ASR + emotion + language-ID + events in one
+  ~70ms pass on CPU); emotion2vec ONNX export is not production-ready yet.
+- **NPU caveat:** AI Boost only runs static-shape graphs — usable for fixed-window denoise/speaker-embed
+  offload, NOT variable-length ASR. Keep variable-length ASR on Arc (Whisper) + CPU (Zipformer).
+
+### Expressive TTS (beyond flat Kokoro)
+- **Pick: Chatterbox** (MIT) — the only open model with a real emotion-intensity knob (`exaggeration`)
+  AND Danish (Multilingual variant) AND a streaming path (<500ms first chunk). **Run it on CPU** (Turbo
+  350M makes that realistic) so a per-turn TTS load never evicts the 26B and wipes its prefix cache.
+  Keep **Piper `da_DK`** (MIT, CPU, instant) as the low-latency Danish fallback for short confirmations.
+  Two-tier: Piper for snappy/short, Chatterbox for expressive/longer.
