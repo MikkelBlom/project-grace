@@ -14,6 +14,10 @@ import { fileURLToPath } from 'url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OLLAMA_URL = process.env.GRACE_OLLAMA_URL ?? 'http://localhost:11434';
 const DRY = process.argv.includes('--dry');
+// A/B: `npm run eval -- --model qwen3.6:27b` runs the same suite against a different reasoning model.
+const modelArg = process.argv.indexOf('--model');
+if (modelArg >= 0 && process.argv[modelArg + 1]) process.env.GRACE_LLM_MODEL = process.argv[modelArg + 1];
+const MODEL = process.env.GRACE_LLM_MODEL ?? 'gemma4:26b';
 
 const { prompts } = JSON.parse(fs.readFileSync(path.join(ROOT, 'eval', 'prompts.json'), 'utf8'));
 
@@ -88,5 +92,5 @@ const byCat = {};
 for (const r of results) { (byCat[r.p.category] ??= { pass: 0, total: 0 }).total++; if (r.sc.pass) byCat[r.p.category].pass++; }
 console.log('\n--- by category ---');
 for (const [c, s] of Object.entries(byCat)) console.log(`  ${c}: ${s.pass}/${s.total}`);
-console.log(`\n=== ${pass}/${results.length} passed | latency p50 ${p50}ms | max ${lat[lat.length - 1] ?? 0}ms ===`);
+console.log(`\n=== model ${MODEL} | ${pass}/${results.length} passed | latency p50 ${p50}ms | max ${lat[lat.length - 1] ?? 0}ms ===`);
 process.exit(pass === results.length ? 0 : 1);

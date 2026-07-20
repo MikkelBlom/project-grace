@@ -74,6 +74,7 @@ import './tools/inject_to_terminal.js';
 import './tools/run_command.js';
 import './tools/reminders.js';
 import './tools/wellness.js';
+import './tools/modes.js';
 import './tools/read_file.js';
 import './tools/create_tool.js';
 import './tools/create_folder.js';
