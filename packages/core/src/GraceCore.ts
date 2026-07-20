@@ -110,6 +110,9 @@ export class GraceCore {
   // hurt WER, so this stays bounded (12) and only runs when GRACE_STT_DYNAMIC_BIAS=1.
   private dynamicBias = process.env.GRACE_STT_DYNAMIC_BIAS === '1';
   private recentBiasTerms: string[] = [];
+  // Auto language switch (opt-in GRACE_AUTO_LANG): if a transcript is clearly the other language,
+  // flip the language mode. Text-based (no STT-server change), conservative to avoid flip-flopping.
+  private autoLang = process.env.GRACE_AUTO_LANG === '1';
 
   constructor(config: GraceConfig) {
     this.config = config;
@@ -158,6 +161,7 @@ export class GraceCore {
       }
 
       this.updateBiasFrom(text);   // bias STT toward proper nouns Mikkel just used (opt-in)
+      this.maybeAutoSwitchLanguage(text);   // flip DA/EN if the utterance is clearly the other language (opt-in)
       let utterance = text;
 
       // ── Voice control fast-path (stop / pause / resume / status) ──
@@ -537,6 +541,21 @@ export class GraceCore {
     if (merged.join('|') !== this.recentBiasTerms.join('|')) {
       this.recentBiasTerms = merged;
       bus.emit('stt:setHotwords', { words: merged });
+    }
+  }
+
+  private maybeAutoSwitchLanguage(text: string): void {
+    if (!this.autoLang || !text) return;
+    const t = text.toLowerCase();
+    const da = (t.match(/[æøå]/g)?.length ?? 0) + (t.match(/\b(og|er|ikke|jeg|det|på|med|han|hun|hvad|hvor|kan|skal|vil|ikke|men)\b/g)?.length ?? 0);
+    const en = (t.match(/\b(the|is|and|you|what|how|are|this|that|with|can|will|should|would|there)\b/g)?.length ?? 0);
+    const cur = settings.language;
+    if (cur === 'da' && en >= 3 && en > da * 2) {
+      settings.setLanguage('en');
+      bus.emit('overlay:notification', { text: '🌐 → English (auto)', level: 'info', duration: 3000 });
+    } else if (cur === 'en' && da >= 2 && da > en * 2) {
+      settings.setLanguage('da');
+      bus.emit('overlay:notification', { text: '🌐 → Dansk (auto)', level: 'info', duration: 3000 });
     }
   }
 
