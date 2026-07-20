@@ -72,21 +72,27 @@ export class GraceCore {
   private _isProcessing = false;
   private processingWatchdog: ReturnType<typeof setTimeout> | null = null;
   // Watchdog: normally `tts:done` clears isProcessing. If TTS never completes (e.g. a hung playback
-  // child), Grace would stay "processing" and go deaf forever. This forces a reset after a turn has
-  // run longer than any legitimate turn (LLM timeout is 180s), so she always recovers to listening.
+  // child), Grace would stay "processing" and go deaf forever. This is an IDLE watchdog, not a total-
+  // turn cap: it's re-armed on every sign of progress (llm:thinking, tool:result), so a legitimately
+  // long multi-step turn keeps resetting it and only a genuinely HUNG turn (no progress for the
+  // interval) resets to listening. A fixed 240s total cap fired mid-turn on long research turns,
+  // freeing the mic and letting a second turn start concurrently — this avoids that.
+  private static readonly WATCHDOG_IDLE_MS = 240_000;
   private get isProcessing(): boolean { return this._isProcessing; }
   private set isProcessing(v: boolean) {
     this._isProcessing = v;
-    if (this.processingWatchdog) { clearTimeout(this.processingWatchdog); this.processingWatchdog = null; }
-    if (v) {
-      this.processingWatchdog = setTimeout(() => {
-        console.warn('[Core] ⏱ processing watchdog — a turn was stuck >240s; resetting so Grace can listen again.');
-        this._isProcessing = false;
-        this.processingWatchdog = null;
-        bus.emit('stt:resume', {});
-        bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
-      }, 240_000);
-    }
+    if (v) this.armWatchdog();
+    else if (this.processingWatchdog) { clearTimeout(this.processingWatchdog); this.processingWatchdog = null; }
+  }
+  private armWatchdog(): void {
+    if (this.processingWatchdog) clearTimeout(this.processingWatchdog);
+    this.processingWatchdog = setTimeout(() => {
+      console.warn('[Core] ⏱ processing watchdog — no progress for 240s; resetting so Grace can listen again.');
+      this._isProcessing = false;
+      this.processingWatchdog = null;
+      bus.emit('stt:resume', {});
+      bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
+    }, GraceCore.WATCHDOG_IDLE_MS);
   }
   private fieldNoteBuffer: string[] = [];
   private listenMode = false;          // "hold the floor" — buffer speech until you say you're done
@@ -220,20 +226,30 @@ export class GraceCore {
       if (this.isProcessing) return;
       this.isProcessing = true;
 
-      if (this.mode !== 'discreet') {
-        this.history.push({
-          role: 'user', content: utterance,
-          timestamp: new Date(), sessionId, persist: true,
-        });
-        this.memory.addTurn(this.sessionId, 'user', utterance);
+      // Anything after the guard is wrapped: if an await here rejects (e.g. building history), we must
+      // clear isProcessing and resume listening — otherwise the turn strands and Grace goes deaf until
+      // the watchdog. On success the normal tts:done path clears the flag.
+      try {
+        if (this.mode !== 'discreet') {
+          this.history.push({
+            role: 'user', content: utterance,
+            timestamp: new Date(), sessionId, persist: true,
+          });
+          this.memory.addTurn(this.sessionId, 'user', utterance);
+        }
+
+        // Feed the LLM as much real conversation as fits its token budget (not a fixed 20-turn
+        // window) — older turns fold into a rolling summary rather than vanishing from context.
+        const historySnapshot = await this.buildHistoryForLLM();
+
+        bus.emit('overlay:show', { type: 'thinking' });
+        bus.emit('llm:thinking', { sessionId, text: utterance, history: historySnapshot });
+      } catch (err) {
+        console.error('[Core] stt:heard handler failed — resetting to listening:', err);
+        this.isProcessing = false;
+        bus.emit('stt:resume', {});
+        bus.emit('overlay:show', { type: 'listening' });
       }
-
-      // Feed the LLM as much real conversation as fits its token budget (not a fixed 20-turn
-      // window) — older turns fold into a rolling summary rather than vanishing from context.
-      const historySnapshot = await this.buildHistoryForLLM();
-
-      bus.emit('overlay:show', { type: 'thinking' });
-      bus.emit('llm:thinking', { sessionId, text: utterance, history: historySnapshot });
     });
 
     // ── LLM response ──────────────────────────
@@ -285,6 +301,11 @@ export class GraceCore {
         bus.emit('overlay:show', { type: (this.powerState === 'paused' || this.powerState === 'sleeping') ? 'paused' : 'listening' });
       }, 500);
     });
+
+    // Re-arm the idle watchdog on every sign of progress so a long-but-active turn is never reset
+    // mid-flight; only a turn that stops making progress for the interval trips it.
+    bus.on('llm:thinking', () => { if (this._isProcessing) this.armWatchdog(); });
+    bus.on('tool:result', () => { if (this._isProcessing) this.armWatchdog(); });
 
     // ── Control: barge-in / interrupt ─────────
     // GraceCore owns its OWN state here (processing flag, listen mode, overlay). TTS stops

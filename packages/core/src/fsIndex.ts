@@ -56,6 +56,7 @@ class FsIndex {
   private watchers: fs.FSWatcher[] = [];
   private watching = false;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+  private rebuildFirstScheduledAt = 0;
 
   constructor() {
     this.config = this.loadConfig();
@@ -85,8 +86,13 @@ class FsIndex {
   }
 
   private scheduleRebuild(): void {
-    if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
-    this.rebuildTimer = setTimeout(() => { this.rebuildTimer = null; void this.build(); }, 15_000);
+    const now = Date.now();
+    if (!this.rebuildTimer) this.rebuildFirstScheduledAt = now;
+    else clearTimeout(this.rebuildTimer);
+    // Debounce 15s of quiet, but never postpone more than 90s under continuous file activity — else
+    // the index stays stale during exactly the busy periods (every event resets the 15s timer).
+    const delay = Math.min(15_000, Math.max(0, 90_000 - (now - this.rebuildFirstScheduledAt)));
+    this.rebuildTimer = setTimeout(() => { this.rebuildTimer = null; this.rebuildFirstScheduledAt = 0; void this.build(); }, delay);
   }
 
   private defaultRoots(): string[] {
@@ -142,11 +148,17 @@ class FsIndex {
     const start = Date.now();
     const out: FsEntry[] = [];
     const seen = new Set<string>();
+    const walked: string[] = [];
     try {
-      for (const rootRaw of this.config.roots) {
-        const root = path.resolve(expandHome(rootRaw));
-        if (seen.has(root.toLowerCase()) || !fs.existsSync(root)) continue;
-        seen.add(root.toLowerCase());
+      // Shallowest roots first so a nested root (e.g. Documents\Projects under Documents) is skipped
+      // instead of re-walking the same files into duplicate entries.
+      const roots = this.config.roots.map((r) => path.resolve(expandHome(r))).sort((a, b) => a.length - b.length);
+      for (const root of roots) {
+        const key = root.toLowerCase();
+        if (seen.has(key) || !fs.existsSync(root)) continue;
+        if (walked.some((w) => key === w || key.startsWith(w + path.sep))) continue; // descendant of an already-walked root
+        seen.add(key);
+        walked.push(key);
         await this.walk(root, 0, out);
         if (out.length >= this.config.maxEntries) break;
       }

@@ -34,7 +34,8 @@ class FocusTimer {
     if (!this.active) return { ok: false, remainingMin: 0 };
     const add = Math.max(1, Math.min(120, Math.round(minutes) || 10));
     this.endsAt += add * 60_000;
-    this.clearTimer();
+    this.clearTimer();          // clearTimer sets active=false…
+    this.active = true;         // …so re-assert it, or status()/extend()/stop() think the session died.
     this.timer = setTimeout(() => this.complete(), Math.max(0, this.endsAt - Date.now()));
     return { ok: true, remainingMin: Math.max(0, Math.round((this.endsAt - Date.now()) / 60_000)) };
   }

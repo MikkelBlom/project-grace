@@ -44,24 +44,37 @@ class Scheduler {
   private tick(): void {
     const now = Date.now();
     const all = this.load();
-    let changed = false;
+    const due: Reminder[] = [];
     const kept: Reminder[] = [];
     for (const r of all) {
       if (r.dueAt <= now) {
-        this.fire(r);
-        changed = true;
-        if (r.recurEveryMs && r.recurEveryMs > 0) { kept.push({ ...r, dueAt: now + r.recurEveryMs }); }
+        due.push(r);
+        if (r.recurEveryMs && r.recurEveryMs > 0) {
+          // Reschedule from dueAt (not `now`) so recurring reminders don't drift forward by up to
+          // one tick each occurrence; step past now in case the machine was asleep for several periods.
+          let next = r.dueAt + r.recurEveryMs;
+          while (next <= now) next += r.recurEveryMs;
+          kept.push({ ...r, dueAt: next });
+        }
         // else: one-shot, drop
       } else kept.push(r);
     }
-    if (changed) this.save(kept);
+    if (due.length) { this.fire(due); this.save(kept); }
   }
 
-  private fire(r: Reminder): void {
+  private fire(due: Reminder[]): void {
     const da = settings.language === 'da';
-    bus.emit('tts:speaking', { text: `${da ? 'Påmindelse' : 'Reminder'}: ${r.text}`, sessionId: `rem-${Date.now()}` });
-    bus.emit('overlay:notification', { text: `⏰ ${r.text}`, level: 'info', duration: 12_000 });
+    // One HUD toast each (unique + cheap), but coalesce the VOICE into a single utterance so a burst
+    // (several due in one tick, e.g. after wake-from-sleep) doesn't speak over itself.
+    for (const r of due) bus.emit('overlay:notification', { text: `⏰ ${r.text}`, level: 'info', duration: 12_000 });
+    const label = da ? 'Påmindelse' : 'Reminder';
+    const text = due.length === 1
+      ? `${label}: ${due[0]!.text}`
+      : `${da ? 'Du har' : 'You have'} ${due.length} ${da ? 'påmindelser' : 'reminders'}: ${due.map((r) => r.text).join('; ')}`;
+    bus.emit('tts:speaking', { text, sessionId: `rem-${Date.now().toString(36)}-${fireSeq++}` });
   }
 }
+
+let fireSeq = 0; // monotonic so batched reminders never share a sessionId within one tick
 
 export const scheduler = new Scheduler();

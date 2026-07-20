@@ -374,7 +374,9 @@ class ChromaBridge {
         'Content-Type': 'application/json',
         ...(init?.headers ?? {}),
       },
-      signal: AbortSignal.timeout(10_000),
+      // Respect a caller-supplied signal (embed() passes 20s for the slow off-GPU embedder); only
+      // default to 10s when none was given, so we don't silently override the intended timeout.
+      signal: init?.signal ?? AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
     return res.json();
@@ -660,7 +662,20 @@ export class GraceMemory {
     this.semanticEngine = 'chroma';
     this.restoreActiveWorkspace();
     void this.chroma.ensureReady();
+    // Flush any pending debounced journal write on process teardown so the last <1.5s of records
+    // (e.g. artifacts/scratchpad notes — the only vector-searchable copy when Chroma is down) aren't
+    // lost. 'exit' is sync-only (writeJson is sync); 'beforeExit' covers a normal drain. Signals are
+    // left to the app's own shutdown so we don't change Ctrl-C behaviour from a library module.
+    process.once('exit', () => this.flushJournal());
+    process.once('beforeExit', () => this.flushJournal());
     console.log(`[Memory] persistence: ${this.engine} (${DATA_DIR})`);
+  }
+
+  /** Write any pending debounced journal immediately (called on process teardown, and safe to call
+   *  directly from an app-level shutdown handler). */
+  flushJournal(): void {
+    if (this.saveJournalTimer) { clearTimeout(this.saveJournalTimer); this.saveJournalTimer = null; }
+    try { writeJson(SEMANTIC_JSON_PATH, { records: this.semanticJournal }); } catch { /* best-effort on exit */ }
   }
 
   private loadState(): StateFile {
@@ -987,8 +1002,11 @@ export class GraceMemory {
   async search(query: string, options: { limit?: number; namespace?: MemoryNamespace | 'all' | MemoryNamespace[]; minScore?: number; recencyWeight?: number; } = {}): Promise<MemorySearchHit[]> {
     const clean = normalizeWhitespace(query);
     const namespaces: string[] = options.namespace && options.namespace !== 'all'
+      // Include 'mission' by default: mission-scratchpad records are written under that namespace and
+      // were otherwise invisible to local-journal recall (yet returned via Chroma), so recall of
+      // mission working-memory silently differed depending on whether Chroma was up.
       ? (Array.isArray(options.namespace) ? options.namespace : [options.namespace])
-      : ['conversation', 'profile', 'task', 'personality'];
+      : ['conversation', 'profile', 'task', 'mission', 'personality'];
     
     const minScore = typeof options.minScore === 'number' ? options.minScore : 0.40;
     const recencyWeight = Math.max(0, Math.min(1, typeof options.recencyWeight === 'number' ? options.recencyWeight : 0.25));

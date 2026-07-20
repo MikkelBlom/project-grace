@@ -229,7 +229,10 @@ const FAST_MODEL = process.env.GRACE_FAST_MODEL ?? '';
 function isTrivialChat(text: string): boolean {
   const t = String(text ?? '').trim().toLowerCase();
   if (t.length > 40) return false;
-  return /^(hej|hi|hello|hey|yo|godmorgen|good ?morning|god ?aften|good ?evening|tak|thanks|thank you|ok|okay|okey|yes|no|ja|nej|jaja|haha|hehe|cool|nice|godt|fint|super|hvordan går det|how are you|what'?s up|godnat|good ?night)\b/.test(t);
+  // FULL-match (…)$, not a \b prefix: "ja slet den fil" / "ok delete it" / "yes do it" are how
+  // destructive actions get CONFIRMED, and they begin with ack words. A prefix match would route
+  // those highest-stakes turns to the weaker fast model — so only a BARE greeting/ack qualifies.
+  return /^(hej|hi|hello|hey|yo|godmorgen|good ?morning|god ?aften|good ?evening|tak|thanks|thank you|ok|okay|okey|yes|no|ja|nej|jaja|haha|hehe|cool|nice|godt|fint|super|hvordan går det|how are you|what'?s up|godnat|good ?night)[\s!.?]*$/.test(t);
 }
 
 function inferPromptQuery(messages: Array<{ role: string; content: string }>): string {
@@ -844,7 +847,13 @@ export class OllamaLLM {
             filePaths,
             verification: filePaths.length ? [`Observed paths: ${filePaths.join(' | ')}`] : [],
           });
-          const combined = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, 128000)}`).join('\n');
+          // Bound fed-back output exactly like the main loop — 10 × 128000 chars would blow past
+          // num_ctx and silently truncate the TASK-MODE system prompt, making the worker forget its role.
+          const TASK_PER_RESULT_CAP = 24000, TASK_COMBINED_CAP = 48000;
+          const combinedRaw = runs.map(r => `TOOL RESULT (${r.tool}): ${JSON.stringify(r.res).slice(0, TASK_PER_RESULT_CAP)}`).join('\n');
+          const combined = combinedRaw.length > TASK_COMBINED_CAP
+            ? combinedRaw.slice(0, TASK_COMBINED_CAP) + '\n…[tool output truncated to fit context]'
+            : combinedRaw;
           const hadMutation = runs.some(r => MUTATING_TOOLS.has(r.tool));
           const verify = hadMutation
             ? 'You changed files — VERIFY with the right follow-up: for write_file/edit_file, read the file back and confirm the requested content is present and non-empty; for create_folder/move_file/delete_file, use list_dir on the relevant folder(s) and confirm the path/state you expected. Do not mark the task done until you actually checked it. ' : '';

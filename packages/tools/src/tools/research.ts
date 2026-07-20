@@ -35,7 +35,10 @@ async function verifyFromSources(question: string, sources: Source[]): Promise<S
     const res = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: VERIFY_MODEL, prompt, stream: false, think: false, format: 'json', options: { temperature: 0.1, num_ctx: 16384 }, keep_alive: -1 }),
+      // num_ctx MUST match the main loop's 131072: this verify runs on the same model mid-turn, and
+      // num_ctx is a load-time param — a different value forces Ollama to reload the model and wipes
+      // the prefix cache (the dominant latency source per the perf notes). Same value → no reload.
+      body: JSON.stringify({ model: VERIFY_MODEL, prompt, stream: false, think: false, format: 'json', options: { temperature: 0.1, num_ctx: 131072 }, keep_alive: -1 }),
       signal: AbortSignal.timeout(45_000),
     });
     if (!res.ok) return null;
