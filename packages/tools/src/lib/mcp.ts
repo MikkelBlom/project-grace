@@ -17,6 +17,28 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+
+/**
+ * Resolve a bare command to a launchable file on Windows WITHOUT a shell. `spawn('npx', …)` fails
+ * with ENOENT because npx is `npx.cmd`, and Node ≥18.20/20.12 blocks spawning `.cmd`/`.bat` without
+ * a shell entirely. We keep shell:false (no metacharacter injection through model-supplied args) and
+ * instead walk PATH × PATHEXT to find the real executable, exactly like a shell's lookup would.
+ */
+function resolveCommand(command: string): string {
+  if (process.platform !== 'win32') return command;
+  if (command.includes('/') || command.includes('\\') || path.extname(command)) return command; // already qualified
+  const exts = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+  }
+  return command; // not found — let spawn surface the ENOENT
+}
 
 export interface McpServer {
   name: string;
@@ -170,7 +192,7 @@ function stdioExecute(server: McpServer, method: string, params: unknown, timeou
 
     let child;
     try {
-      child = spawn(server.command, server.args ?? [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(resolveCommand(server.command), server.args ?? [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       reject(new Error(`failed to spawn '${server.command}': ${String(e)}`));
       return;
