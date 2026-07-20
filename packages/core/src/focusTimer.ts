@@ -27,6 +27,7 @@ class FocusTimer {
       text: this.task ? `🎯 Fokus: ${this.task} (${min} min)` : `🎯 Fokus i ${min} min`,
       level: 'info', duration: 4000,
     });
+    bus.emit('overlay:timer', { active: true, endsAt: this.endsAt, task: this.task });
     return { ok: true, endsInMin: min, task: this.task };
   }
 
@@ -37,6 +38,7 @@ class FocusTimer {
     this.clearTimer();          // clearTimer sets active=false…
     this.active = true;         // …so re-assert it, or status()/extend()/stop() think the session died.
     this.timer = setTimeout(() => this.complete(), Math.max(0, this.endsAt - Date.now()));
+    bus.emit('overlay:timer', { active: true, endsAt: this.endsAt, task: this.task });
     return { ok: true, remainingMin: Math.max(0, Math.round((this.endsAt - Date.now()) / 60_000)) };
   }
 
@@ -51,6 +53,7 @@ class FocusTimer {
   stop(): { ok: boolean } {
     const was = this.active;
     this.clearTimer();
+    bus.emit('overlay:timer', { active: false, endsAt: 0, task: '' });
     return { ok: was };
   }
 
@@ -61,6 +64,7 @@ class FocusTimer {
       : (da ? 'Så er der pause — godt arbejde. Rejs dig og stræk ud lidt.' : "Time's up — nice work. Stand up and stretch for a bit.");
     bus.emit('tts:speaking', { text: msg, sessionId: `focus-${Date.now()}` });
     bus.emit('overlay:notification', { text: '☕ Pause', level: 'info', duration: 8000 });
+    bus.emit('overlay:timer', { active: false, endsAt: 0, task: '' });
     this.clearTimer();
   }
 

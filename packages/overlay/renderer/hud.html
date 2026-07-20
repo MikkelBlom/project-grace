@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Grace HUD</title>
+<style>
+  /* Passive, click-through overlay: nothing here ever captures the mouse. */
+  :root {
+    --fg: rgba(240, 244, 255, 0.96);
+    --fg-dim: rgba(240, 244, 255, 0.55);
+    --surface: 20, 24, 38;              /* rgb triplet, composed with alpha below */
+    --accent: 120, 170, 255;
+    --grace: 150, 210, 190;
+    --shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  }
+  :root.light {
+    --fg: rgba(20, 26, 40, 0.96);
+    --fg-dim: rgba(20, 26, 40, 0.5);
+    --surface: 250, 252, 255;
+    --shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  }
+  html, body {
+    margin: 0; width: 100%; height: 100%; overflow: hidden;
+    background: transparent;
+    pointer-events: none;               /* click-through: never intercept input */
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .card {
+    background: rgba(var(--surface), 0.82);
+    color: var(--fg);
+    border: 1px solid rgba(var(--accent), 0.20);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(3px);
+  }
+
+  /* ── Live transcript (bottom-left) ── */
+  #transcript {
+    position: fixed; left: 22px; bottom: 22px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    gap: 6px; max-width: 34vw; max-height: 40vh;
+    /* fade the oldest lines out at the top */
+    -webkit-mask-image: linear-gradient(to top, #000 62%, transparent);
+            mask-image: linear-gradient(to top, #000 62%, transparent);
+  }
+  .line {
+    padding: 7px 12px; border-radius: 12px; font-size: 14px; line-height: 1.35;
+    background: rgba(var(--surface), 0.80); color: var(--fg);
+    box-shadow: var(--shadow); border: 1px solid rgba(var(--accent), 0.14);
+    opacity: 0; transform: translateY(6px);
+    transition: opacity .22s ease, transform .22s ease;
+    will-change: opacity, transform;
+  }
+  .line.in { opacity: 1; transform: none; }
+  .line .who { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-dim); margin-right: 6px; }
+  .line.you  { border-left: 3px solid rgba(var(--accent), 0.85); }
+  .line.grace{ border-left: 3px solid rgba(var(--grace), 0.9); }
+
+  /* ── Focus countdown (top-right) ── */
+  #timer {
+    position: fixed; top: 20px; right: 20px;
+    display: none; align-items: center; gap: 12px;
+    padding: 12px 16px 12px 12px;
+  }
+  #timer.on { display: flex; }
+  #ring { width: 46px; height: 46px; transform: rotate(-90deg); }
+  #ring .track { stroke: rgba(var(--accent), 0.18); }
+  #ring .prog  { stroke: rgba(var(--accent), 0.95); stroke-linecap: round;
+                 transition: stroke-dashoffset .9s linear; }
+  #timer .meta { display: flex; flex-direction: column; }
+  #timer .rem  { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
+  #timer .task { font-size: 12px; color: var(--fg-dim); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Notification toasts (top-center) ── */
+  #toasts {
+    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; gap: 8px; align-items: center;
+  }
+  .toast {
+    padding: 10px 16px; border-radius: 12px; font-size: 13.5px; max-width: 46vw;
+    background: rgba(var(--surface), 0.90); color: var(--fg); box-shadow: var(--shadow);
+    border: 1px solid rgba(var(--accent), 0.18);
+    opacity: 0; transform: translateY(-8px); transition: opacity .25s ease, transform .25s ease;
+    will-change: opacity, transform;
+  }
+  .toast.in { opacity: 1; transform: none; }
+  .toast.warning { border-color: rgba(240, 190, 90, 0.6); }
+  .toast.error   { border-color: rgba(240, 110, 110, 0.7); }
+</style>
+</head>
+<body>
+  <div id="transcript"></div>
+
+  <div id="timer" class="card">
+    <svg id="ring" viewBox="0 0 46 46">
+      <circle class="track" cx="23" cy="23" r="20" fill="none" stroke-width="4" />
+      <circle class="prog"  cx="23" cy="23" r="20" fill="none" stroke-width="4" />
+    </svg>
+    <div class="meta"><span class="rem">–</span><span class="task"></span></div>
+  </div>
+
+  <div id="toasts"></div>
+
+<script>
+(function () {
+  'use strict';
+  var hud = window.hud || {};
+
+  // ── Theme ──
+  function applyTheme(dark) { document.documentElement.classList.toggle('light', !dark); }
+  if (hud.onTheme) hud.onTheme(function (d) { applyTheme(!!d.dark); });
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    applyTheme(mq.matches);
+    mq.addEventListener('change', function (e) { applyTheme(e.matches); });
+  }
+
+  // ── Live transcript ── (append finalized lines; cap the DOM; animate opacity/transform only)
+  var MAX_LINES = 14;
+  var tEl = document.getElementById('transcript');
+  var pending = [];
+  var scheduled = false;
+  function flush() {
+    scheduled = false;
+    while (pending.length) {
+      var item = pending.shift();
+      var el = document.createElement('div');
+      el.className = 'line ' + (item.role === 'grace' ? 'grace' : 'you');
+      var who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = item.role === 'grace' ? 'Grace' : 'You';
+      el.appendChild(who);
+      el.appendChild(document.createTextNode(item.text));
+      tEl.appendChild(el);
+      // next frame → transition in
+      requestAnimationFrame(function (node) { return function () { node.classList.add('in'); }; }(el));
+    }
+    while (tEl.children.length > MAX_LINES) tEl.removeChild(tEl.firstChild);
+  }
+  function addLine(role, text) {
+    pending.push({ role: role, text: String(text).slice(0, 240) });
+    if (!scheduled) { scheduled = true; requestAnimationFrame(flush); }
+  }
+  if (hud.onTranscript) hud.onTranscript(function (d) { addLine(d.role, d.text); });
+
+  // ── Focus countdown ── (CSS animates the ring; JS updates the label ≤1×/sec via rAF)
+  var timerEl = document.getElementById('timer');
+  var remEl = timerEl.querySelector('.rem');
+  var taskEl = timerEl.querySelector('.task');
+  var prog = document.getElementById('ring').querySelector('.prog');
+  var R = 20, CIRC = 2 * Math.PI * R;
+  prog.style.strokeDasharray = CIRC;
+  var timer = { active: false, endsAt: 0, total: 0, lastLabel: '' };
+
+  function fmt(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    var m = Math.floor(s / 60); s = s % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+  function tickTimer() {
+    if (!timer.active) return;
+    var left = timer.endsAt - Date.now();
+    if (left <= 0) { setTimer({ active: false, endsAt: 0, task: '' }); return; }
+    var label = fmt(left);
+    if (label !== timer.lastLabel) { remEl.textContent = label; timer.lastLabel = label; }
+    var frac = timer.total > 0 ? left / timer.total : 0;
+    prog.style.strokeDashoffset = CIRC * (1 - frac);
+    requestAnimationFrame(tickTimer);
+  }
+  function setTimer(d) {
+    var was = timer.active;
+    timer.active = !!d.active;
+    if (timer.active) {
+      // total is inferred from the first sighting so the ring has a full sweep to draw against.
+      timer.endsAt = d.endsAt;
+      timer.total = Math.max(1000, d.endsAt - Date.now());
+      timer.lastLabel = '';
+      taskEl.textContent = d.task || '';
+      timerEl.classList.add('on');
+      if (!was) requestAnimationFrame(tickTimer);
+    } else {
+      timerEl.classList.remove('on');
+    }
+  }
+  if (hud.onTimer) hud.onTimer(setTimer);
+
+  // ── Notification toasts ── (auto-dismiss; transform/opacity in-out)
+  var toastsEl = document.getElementById('toasts');
+  if (hud.onToast) hud.onToast(function (d) {
+    var el = document.createElement('div');
+    el.className = 'toast ' + (d.level || 'info');
+    el.textContent = String(d.text || '').slice(0, 200);
+    toastsEl.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('in'); });
+    var ttl = Math.max(2500, Math.min(20000, d.duration || 6000));
+    setTimeout(function () {
+      el.classList.remove('in');
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+    }, ttl);
+  });
+})();
+</script>
+</body>
+</html>

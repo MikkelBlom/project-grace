@@ -67,6 +67,13 @@ export interface GraceEvents {
     level: 'info' | 'warning' | 'error';
     duration?: number;
   };
+  /** Focus/Deep-Work timer state for the (opt-in) HUD countdown widget. active:false clears it. */
+  'overlay:timer': {
+    active: boolean;
+    /** epoch ms when the timer ends (only meaningful while active) */
+    endsAt: number;
+    task: string;
+  };
   /**
    * Annotate a screen element with an animated focus box.
    * Coordinates are in screen pixels (from LLaVA bounding box output).

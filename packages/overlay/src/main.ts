@@ -25,6 +25,7 @@ import { defaultConfig } from '@grace/shared';
 import { setupBridge } from './bridge.js';
 import { GraceTray } from './tray.js';
 import { VignetteWindow } from './vignetteWindow.js';
+import { HudWindow } from './hudWindow.js';
 import { ContextDetector } from './contextDetector.js';
 import { DebugWindow } from './debugWindow.js';
 
@@ -50,6 +51,7 @@ let core:            GraceCore        | null = null;
 let stt:             { start(): void; stop(): void } | null = null;
 let tray:            GraceTray        | null = null;
 let vignetteWin:     VignetteWindow   | null = null;
+let hudWin:          HudWindow        | null = null;
 let powerManager:    PowerManager     | null = null;
 let contextDetector: ContextDetector  | null = null;
 let debugWin:        DebugWindow      | null = null;
@@ -200,6 +202,9 @@ async function startServices(): Promise<void> {
   // ── Overlay services ───────────────────────
   if (mainWindow) setupBridge(mainWindow);
   vignetteWin = new VignetteWindow();
+  // Opt-in passive HUD overlay (live transcript, focus countdown, toasts) in its OWN window —
+  // set GRACE_HUD=1 to enable. Off by default so the vignette is unchanged. See hudWindow.ts.
+  if (process.env.GRACE_HUD === '1' || process.env.GRACE_HUD === 'true') hudWin = new HudWindow();
   if (mainWindow) tray = new GraceTray(mainWindow);
 
   // ── Context detection (Phase 1+) ──────────
@@ -343,6 +348,7 @@ app.on('will-quit', () => {
   stt?.stop();
   tray?.destroy();
   vignetteWin?.destroy();
+  hudWin?.destroy();
   contextDetector?.stop();
   debugWin?.destroy();
 });
