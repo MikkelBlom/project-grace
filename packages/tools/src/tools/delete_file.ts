@@ -1,3 +1,4 @@
+import { undoManager } from '@grace/core';
 import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Delete a local file (gated to the user's home folder for safety).
@@ -20,6 +21,7 @@ registerTool({
     try {
       const stats = await fs.stat(p);
       if (stats.isDirectory()) return { error: `Refused: ${p} is a directory. delete_file can only delete files.` };
+      undoManager.beforeDelete(p, `delete ${path.basename(p)}`);
       await fs.unlink(p);
       return { path: p, ok: true };
     } catch (e) { return { path: p, error: String(e) }; }

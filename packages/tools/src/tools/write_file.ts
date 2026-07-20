@@ -1,3 +1,4 @@
+import { undoManager } from '@grace/core';
 import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Create / write a text file (gated to the user's home folder for safety).
@@ -20,6 +21,7 @@ registerTool({
     if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only files under home can be written.` };
     if (isGraceOwnSource(p)) return { error: `Refused: ${p} is part of Grace's own source code — change your own tools/code via create_tool (sandbox-validated), not raw write_file.` };
     const content = String(args.content ?? '');
+    undoManager.beforeWrite(p, `write ${path.basename(p)}`);
     try {
       await fs.mkdir(path.dirname(p), { recursive: true });
       

@@ -1,3 +1,4 @@
+import { undoManager } from '@grace/core';
 import { registerTool } from '../registry.js';
 
 // Create a folder (and any missing parents) under the home folder.
@@ -17,6 +18,7 @@ registerTool({
     const p = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(home, raw);
     if (!p.startsWith(home)) return { error: `Refused: ${p} is outside your home folder (${home}). Only folders under home can be created.` };
     try {
+      undoManager.beforeMkdir(p, `create folder ${path.basename(p)}`);
       await fs.mkdir(p, { recursive: true });
       return { path: p, ok: true };
     } catch (e) { return { path: p, error: String(e) }; }

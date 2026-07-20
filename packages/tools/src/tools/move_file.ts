@@ -1,3 +1,4 @@
+import { undoManager } from '@grace/core';
 import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Move / rename a file (so Grace relocates files instead of re-creating them).
@@ -22,6 +23,7 @@ registerTool({
     try {
       try { const st = await fs.stat(to); if (st.isDirectory()) to = path.join(to, path.basename(from)); } catch { /* to does not exist yet */ }
       await fs.mkdir(path.dirname(to), { recursive: true });
+      undoManager.beforeMove(from, to, `move ${path.basename(from)}`);
       await fs.rename(from, to);
       return { from, to, ok: true };
     } catch (e) { return { from, to, error: String(e) }; }

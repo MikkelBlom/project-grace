@@ -1,3 +1,4 @@
+import { undoManager } from '@grace/core';
 import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Bulk-write multiple files in a single tool call.
@@ -48,6 +49,7 @@ registerTool({
 
       try {
         await fs.mkdir(pathMod.dirname(p), { recursive: true });
+        undoManager.beforeWrite(p, `write ${pathMod.basename(p)}`);
 
         if (mode === 'append') {
           await fs.appendFile(p, content, 'utf-8');

@@ -1,3 +1,4 @@
+import { undoManager } from '@grace/core';
 import { registerTool, isGraceOwnSource } from '../registry.js';
 
 // Versatile tool to edit files surgically.
@@ -89,6 +90,7 @@ registerTool({
       return { error: `Unknown mode: ${mode}` };
     }
     
+    undoManager.beforeWrite(p, `edit ${path.basename(p)}`);
     await fs.writeFile(p, newText, 'utf-8');
     return { path: p, mode, ok: true };
   }
