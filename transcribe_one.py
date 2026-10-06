@@ -10,7 +10,7 @@ BACKEND = sys.argv[2]
 DEVICE  = sys.argv[3] if len(sys.argv) > 3 else "GPU.0"
 LANG    = "da"
 import os
-OV_MODEL = os.environ.get("GRACE_OV_MODEL", r"C:\Users\mikke\Documents\Claude\Projects\AI automation\grace\models\ov-whisper-large-v3-fp16")
+OV_MODEL = os.environ.get("GRACE_OV_MODEL", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "ov-whisper-large-v3-fp16"))
 RUNS = 3
 
 a, sr = sf.read(WAV, dtype="float32")

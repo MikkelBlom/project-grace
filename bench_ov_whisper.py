@@ -9,13 +9,13 @@ Reports BOTH the one-time compile/load cost (paid once at startup) and the stead
 median latency (paid every turn). Usage:
   py -3.12 bench_ov_whisper.py [path-to-wav] [language]   # language e.g. da / en / auto
 """
-import sys, time, statistics
+import os, sys, time, statistics
 import numpy as np
 import soundfile as sf
 
-WAV  = sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\mikke\Documents\Claude\Projects\AI automation\grace\test.wav"
+WAV  = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "test.wav")
 LANG = sys.argv[2] if len(sys.argv) > 2 else "auto"      # "auto" lets Whisper detect; Grace forces "da"
-OV_MODEL = r"C:\Users\mikke\Documents\Claude\Projects\AI automation\grace\models\ov-whisper-large-v3-fp16"
+OV_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "ov-whisper-large-v3-fp16")
 FW_MODEL = "large-v3"
 RUNS = 3
 

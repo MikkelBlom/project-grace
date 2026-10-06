@@ -49,7 +49,7 @@ interruptible. All headless-verified; the items below still need a live voice ru
   "din tur"), so Mikkel can explain complex things across pauses without Grace replying.
 - **Open — batch JSON corruption**: at ~50 calls in one reply, 26b emits malformed JSON — garbled tool
   names (`$\write_file`, `・・write_file`, `write_string`, `else_logic`), stray `pattern`/`lag` keys,
-  broken paths (`C:\Users\mikke\:\Users...`, dropped `toolsplit`). Result: a few files end up empty or
+  broken paths (`C:\Users\you\:\Users...`, dropped `toolsplit`). Result: a few files end up empty or
   misplaced (the "missed file"). Fix ideas: cap batch size (~10–15/reply) in taskSys; or a dedicated
   `write_files`/`create_files` bulk tool that takes an array, so the model emits ONE small call not 50.
 - **Open — cancel timing**: "sæt på pause" often arrives after the (now-fast) task already finished, so

@@ -14,7 +14,7 @@ registerTool({
   name: 'add_indexed_folder',
   description: 'Add a folder to Grace\'s filesystem index so she can find files in it fast. Use when Mikkel asks Grace to index/watch/remember a folder, or when he keeps asking about files in a location she hasn\'t indexed — offer to add it. Whole drives are allowed (system/build junk is auto-skipped). Reindexes in the background.',
   params: {
-    path: { type: 'string', description: 'absolute folder path to index (e.g. C:\\Users\\mikke\\Studie)', required: true },
+    path: { type: 'string', description: 'absolute folder path to index (e.g. C:\\Users\\you\\Studie)', required: true },
   },
   async run(args) {
     const res = fsIndex.addRoot(String(args.path ?? ''));

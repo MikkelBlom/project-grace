@@ -2,10 +2,10 @@
 # Downloads + converts Grace's recommended models (docs/6-MODEL-UPGRADES.md). Continues past
 # individual failures; every step's exit code is logged. Run in the background; tail logs/model-fetch.log.
 set +e
-cd "/c/Users/mikke/Documents/Claude/Projects/AI automation/grace" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 LOG="logs/model-fetch.log"
 mkdir -p logs models
-SCRIPTS="C:/Users/mikke/AppData/Local/Programs/Python/Python312/Scripts"
+SCRIPTS="$(py -3.12 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
 
 echo "=== model fetch START $(date) ===" > "$LOG"
 

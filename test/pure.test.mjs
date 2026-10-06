@@ -67,7 +67,7 @@ test('commandSafety: chaining/redirection/substitution never auto-run', () => {
   // The critical bypass: a read-only prefix must NOT whitelist a chained destructive command.
   assert.equal(classifyReadOnly('echo x & del foo.txt', false), false);
   assert.equal(classifyReadOnly('git status && node -e "require(1)"', true), false);
-  assert.equal(classifyReadOnly('echo x > C:\\Users\\mikke\\.bashrc', false), false); // redirection
+  assert.equal(classifyReadOnly('echo x > C:\\Users\\you\\.bashrc', false), false); // redirection
   assert.equal(classifyReadOnly('echo `rm -rf ~`', false), false);                    // backtick subst
   assert.equal(classifyReadOnly('echo $(whoami)', false), false);                     // $() subst
 });
@@ -88,7 +88,7 @@ test('commandSafety: npm test / tsc only auto-run inside the repo', () => {
 
 test('commandSafety: hard-deny catches destructive forms + aliases', () => {
   for (const c of [
-    'rm -rf /', 'rm --recursive --force ~/x', 'rm -rf C:\\Users\\mikke\\Documents',
+    'rm -rf /', 'rm --recursive --force ~/x', 'rm -rf C:\\Users\\you\\Documents',
     'rd /s /q C:\\x', 'erase /q /f a.txt', 'del /q foo', 'Remove-Item -Force -Recurse C:\\x',
     'format C:', 'diskpart', 'shutdown /s', 'reg delete HKLM\\x', 'dd if=/dev/zero of=/dev/sda',
   ]) assert.equal(isHardDenied(c), true, `should hard-deny: ${c}`);

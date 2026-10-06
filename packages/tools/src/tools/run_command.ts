@@ -32,7 +32,7 @@ registerTool({
     if (isHardDenied(command)) return { error: `Refused: this command matches a hard-blocked destructive/system pattern and will NOT run. (${command.slice(0, 80)})`, blocked: true };
 
     // cwd gate: under home or the Grace repo only. Compare with a separator so a sibling dir
-    // like C:\Users\mikkel can't pass the C:\Users\mikke gate (prefix-escape fix).
+    // like C:\Users\mikkel can't pass the C:\Users\you gate (prefix-escape fix).
     const home = path.resolve(os.homedir());
     const cwd = path.resolve(String(args.cwd ?? home));
     const cwdInsideRepo = underDir(cwd, ROOT);

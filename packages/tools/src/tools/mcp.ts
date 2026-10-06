@@ -72,7 +72,7 @@ registerTool({
   params: {
     name: { type: 'string', description: 'short unique name for this server, e.g. "filesystem"', required: true },
     command: { type: 'string', description: 'stdio transport: the executable to run, e.g. "npx" or "node"' },
-    args: { type: 'string', description: 'stdio transport: arguments for the command as one string, e.g. "-y @modelcontextprotocol/server-filesystem C:/Users/mikke"' },
+    args: { type: 'string', description: 'stdio transport: arguments for the command as one string, e.g. "-y @modelcontextprotocol/server-filesystem C:/Users/you"' },
     url: { type: 'string', description: 'http transport: the JSON-RPC endpoint URL (use this INSTEAD of command)' },
   },
   async run(args) {
@@ -171,7 +171,7 @@ registerTool({
   params: {
     server: { type: 'string', description: 'the configured server name (from mcp_list_servers)', required: true },
     tool: { type: 'string', description: 'the tool name to call (from mcp_list_tools)', required: true },
-    args: { type: 'string', description: "arguments for the tool as a JSON object or JSON string, e.g. {\"path\":\"C:/Users/mikke/notes.txt\"} (omit if the tool needs none)" },
+    args: { type: 'string', description: "arguments for the tool as a JSON object or JSON string, e.g. {\"path\":\"C:/Users/you/notes.txt\"} (omit if the tool needs none)" },
   },
   async run(args) {
     const name = String(args.server ?? '').trim();

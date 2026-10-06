@@ -36,7 +36,7 @@ korrekt skabelon at falde tilbage på. 15 min for denne mission var mest fejlede
 
 ### 5. Hun ved ikke hvad hun har lavet eller hvor tingene ligger
 Da du spurgte til `openai_stub` / `phase_3_consolidation`, søgte hun **8 gange i forkerte stier**
-(`C:\Users\mikke\packages\tools` — findes ikke!), løb tør for steps, og sagde "I ran out of steps."
+(`C:\Users\you\packages\tools` — findes ikke!), løb tør for steps, og sagde "I ran out of steps."
 **Rod-årsag:** ingen vedvarende arbejds-hukommelse + hun kender ikke sin egen repo-rod
 (`…\grace\packages\tools`). Hvert spørgsmål starter koldt.
 
